@@ -251,16 +251,21 @@ async def openai_create_video(request: Request):
 
 
 @router.get("/v1/videos/{job_id}")
-def openai_video_status(job_id: str):
+def openai_video_status(job_id: str, request: Request):
     job = core.get_job(job_id)
     if not job:
         raise HTTPException(404, "video not found")
-    return {
+    status = _SORA_STATUS.get(job["status"], "in_progress")
+    out = {
         "id": job_id,
-        "status": _SORA_STATUS.get(job["status"], "in_progress"),
+        "status": status,
         "progress": job["progress"],
         "error": job["error"],
     }
+    # 影策/newapi 协议在 succeeded 时从这里取结果地址；本地回环可达
+    if status == "completed":
+        out["url"] = str(request.base_url).rstrip("/") + f"/v1/videos/{job_id}/content"
+    return out
 
 
 @router.get("/v1/videos/{job_id}/content")

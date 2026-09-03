@@ -152,7 +152,9 @@ def test_sora_status_mapping_and_content(client):
     done = wait_done(client, jid)
     assert done["status"] == "completed"
     s = client.get(f"/v1/videos/{jid}").json()
-    assert s == {"id": jid, "status": "completed", "progress": 1.0, "error": None}
+    assert s["status"] == "completed" and s["progress"] == 1.0 and s["error"] is None
+    # 影策/newapi 协议依赖 completed 响应携带结果地址
+    assert s["url"].endswith(f"/v1/videos/{jid}/content"), s
     c = client.get(f"/v1/videos/{jid}/content")
     assert c.status_code == 200 and c.content == b"FAKE"
     # gateway "cancelled" surfaces as failed for legacy callers
