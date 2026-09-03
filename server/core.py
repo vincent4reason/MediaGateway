@@ -70,18 +70,22 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority DESC, create
 
 _conn: sqlite3.Connection | None = None
 _lock = threading.Lock()
+_db_init_lock = threading.Lock()
 
 
 def db() -> sqlite3.Connection:
     global _conn
     if _conn is None:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA busy_timeout=5000")
-        _conn.executescript(_SCHEMA)
-        _conn.commit()
+        with _db_init_lock:  # first request and scheduler thread can race here
+            if _conn is None:
+                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.executescript(_SCHEMA)
+                conn.commit()
+                _conn = conn
     return _conn
 
 

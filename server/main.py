@@ -14,6 +14,9 @@ from . import core
 
 app = FastAPI(title="AI Media Gateway")
 
+from .compat_h3cweb import router as compat_h3cweb_router  # noqa: E402 — h3cweb :8600 face
+app.include_router(compat_h3cweb_router)  # registered before /info below so old format wins
+
 
 class JobIn(BaseModel):
     type: str
