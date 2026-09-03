@@ -63,3 +63,10 @@ cd ~/tool/iris.c
 | `workers/cosyvoice/client.py` + `voices.json` | TTS 客户端 + 音色表（原样复制） |
 | `workers/render/*.sh` | ffmpeg 拼接/混音/冻帧（原样复制） |
 | `server/main.py` | 参考（队列/进度模式），MediaGateway 重写为多 Worker 统一调度 |
+
+## 5. ACE-Step 1.5 — Music Engine（P4 已部署）
+
+- 位置：`~/tool/ace-step`（官方 repo `ace-step/ACE-Step-1.5`，权重 `ACE-Step/Ace-Step1.5` 共 9.4GB）
+- 独立 `.venv`（py3.12 + torch MPS/MLX）；包装脚本 `mg_music.py`（DiT-only，thinking=False）
+- 实测：45s cinematic BGM 冷 128s / **暖 17s**，峰值 RSS **14.8GB**，输出 48kHz/16bit 立体声 WAV
+- Memory budget：`MEM_GB=15`（保守值）；LM/thinking 路径未启用（需要歌词扩展时再开）
