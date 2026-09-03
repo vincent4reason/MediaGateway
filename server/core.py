@@ -78,6 +78,8 @@ def db() -> sqlite3.Connection:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA busy_timeout=5000")
         _conn.executescript(_SCHEMA)
         _conn.commit()
     return _conn
@@ -107,6 +109,8 @@ def get_job(job_id: str) -> dict | None:
 
 
 def _update(job_id: str, **fields):
+    if not fields:
+        return
     sets, vals = zip(*[(k, json.dumps(v) if k in ("meta", "params") else v)
                        for k, v in fields.items()])
     with _lock:
@@ -119,11 +123,19 @@ def cancel_job(job_id: str) -> bool:
     job = get_job(job_id)
     if not job:
         return False
-    if job["status"] == "queued":
-        _update(job_id, status="cancelled", finished_at=time.time())
-        return True
     if job["status"] == "running":
         _CANCELLED.add(job_id)  # cooperative; worker checks via cancel()
+        return True
+    if job["status"] == "queued":
+        with _lock:
+            cur = db().execute(
+                "UPDATE jobs SET status='cancelled', finished_at=? "
+                "WHERE id=? AND status='queued'",  # lost race => it's running now
+                (time.time(), job_id))
+            db().commit()
+            if cur.rowcount:
+                return True
+        _CANCELLED.add(job_id)
         return True
     return False
 
@@ -138,8 +150,9 @@ _pick_lock = threading.Lock()  # serialize admit decisions
 
 def _admit_next() -> tuple[str, dict] | None:
     reg = registry()
-    running_gb = sum(reg[r["type"]].MEM_GB for r in db().execute(
-        "SELECT type FROM jobs WHERE status='running'"))
+    running_gb = sum(
+        (reg[r["type"]].MEM_GB if r["type"] in reg else BUDGET_GB)  # unknown => assume worst
+        for r in db().execute("SELECT type FROM jobs WHERE status='running'"))
     q = db().execute(
         "SELECT * FROM jobs WHERE status='queued' ORDER BY priority DESC, created_at")
     for row in q:
