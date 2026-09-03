@@ -7,8 +7,16 @@ Worker contract — each module in server/workers/<name>.py defines:
         params   : request params (validated by the worker itself)
         job_dir  : Path — write all outputs here
         progress : f(ratio: float, phase: str)
-        cancel   : f() -> bool — check periodically, raise CancelledError to abort
+        cancel   : f() -> bool — check periodically; raise any Exception to abort
         returns  : {"output_path": str, ...meta} recorded on the job
+
+Cancellation semantics: cancel() is cooperative. A job that ignores it may
+still finish "completed" after cancel was requested — the final DB status is
+always authoritative. Cancel does NOT retry and does NOT kill subprocesses.
+
+Engine-resident memory: workers may hold loaded models between jobs
+(e.g. video keep_loaded, voice tts_server). _admit_next adds those resident
+amounts to the budget check via the worker modules' module-level state.
 """
 from __future__ import annotations
 
@@ -84,6 +92,16 @@ def db() -> sqlite3.Connection:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA busy_timeout=5000")
                 conn.executescript(_SCHEMA)
+                # crash recovery: running jobs died with the old process —
+                # their threads are gone; leaving them 'running' would poison
+                # the memory budget forever. Queued jobs are still valid.
+                cur = conn.execute(
+                    "UPDATE jobs SET status='failed', "
+                    "error='interrupted by gateway restart', finished_at=? "
+                    "WHERE status='running'", (time.time(),))
+                if cur.rowcount:
+                    print(f"[core] recovered {cur.rowcount} orphaned running job(s)",
+                          flush=True)
                 conn.commit()
                 _conn = conn
     return _conn
@@ -137,10 +155,15 @@ def cancel_job(job_id: str) -> bool:
                 "WHERE id=? AND status='queued'",  # lost race => it's running now
                 (time.time(), job_id))
             db().commit()
-            if cur.rowcount:
-                return True
-        _CANCELLED.add(job_id)
-        return True
+        if cur.rowcount:
+            return True
+        # lost the race — it started running while we updated; re-check so a
+        # job that actually finished in between is not marked cancellable
+        job = get_job(job_id)
+        if job and job["status"] == "running":
+            _CANCELLED.add(job_id)
+            return True
+        return False
     return False
 
 
@@ -152,11 +175,26 @@ _CANCELLED: set[str] = set()
 _pick_lock = threading.Lock()  # serialize admit decisions
 
 
+def _resident_gb(reg: dict) -> float:
+    """Memory held by engines/processes between jobs (invisible to the
+    per-job accounting): video keep_loaded engine, voice tts_server."""
+    gb = 0.0
+    video_mod = reg.get("video")
+    if video_mod is not None and getattr(video_mod, "_engine", None) is not None:
+        gb += video_mod.MEM_GB
+    voice_mod = reg.get("voice")
+    proc = getattr(voice_mod, "_proc", None) if voice_mod else None
+    if voice_mod is not None and proc is not None and proc.poll() is None:
+        gb += voice_mod.MEM_GB
+    return gb
+
+
 def _admit_next() -> tuple[str, dict] | None:
     reg = registry()
     running_gb = sum(
         (reg[r["type"]].MEM_GB if r["type"] in reg else BUDGET_GB)  # unknown => assume worst
         for r in db().execute("SELECT type FROM jobs WHERE status='running'"))
+    running_gb += _resident_gb(reg)
     q = db().execute(
         "SELECT * FROM jobs WHERE status='queued' ORDER BY priority DESC, created_at")
     for row in q:

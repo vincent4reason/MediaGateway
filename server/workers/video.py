@@ -126,8 +126,10 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
                 on_progress=on_progress, **overrides)
         finally:
             if not params.get("keep_loaded"):
-                engine.close()
+                # reset the singleton FIRST: if close() raises we must not
+                # leave it pointing at a (possibly broken) closed engine
                 _engine = None
+                engine.close()
     if cancel():
         raise VideoError("cancelled")
     return {"output_path": output_path,

@@ -31,6 +31,7 @@ IDLE_EXIT_S = float(os.environ.get("COSYVOICE_IDLE_EXIT_S", "300"))
 
 _proc: subprocess.Popen | None = None
 _last_use = 0.0
+_busy = False  # a synthesis is in flight — watchdog must not kill the server
 _lock = threading.Lock()
 
 
@@ -51,9 +52,12 @@ def _ensure_server(progress):
             return
         if _proc is None or _proc.poll() is not None:
             log = open(os.path.join(TTS_DIR, "tts_server.log"), "ab")
-            _proc = subprocess.Popen(
-                [os.path.join(TTS_DIR, ".venv/bin/python"), "tts_server.py"],
-                cwd=TTS_DIR, stdout=log, stderr=log)
+            try:
+                _proc = subprocess.Popen(
+                    [os.path.join(TTS_DIR, ".venv/bin/python"), "tts_server.py"],
+                    cwd=TTS_DIR, stdout=log, stderr=log)
+            finally:
+                log.close()  # child keeps its dups; parent handle not needed
         progress(0.05, "starting tts")
         deadline = time.time() + 180
         while time.time() < deadline:
@@ -65,12 +69,13 @@ def _ensure_server(progress):
 
 
 def _watchdog():
-    # only ever kills a server we spawned ourselves
+    # only ever kills a server we spawned ourselves, and never while a
+    # synthesis is in flight (_busy) even if it outlives IDLE_EXIT_S
     global _proc
     while True:
         time.sleep(30)
         with _lock:
-            if (_proc is not None and _proc.poll() is None
+            if (_proc is not None and _proc.poll() is None and not _busy
                     and time.time() - _last_use > IDLE_EXIT_S):
                 _proc.terminate()
                 _proc = None
@@ -93,6 +98,9 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
 
     progress(0.1, "synthesizing")
     out = str(job_dir / "dialogue.wav")
+    global _busy
+    with _lock:
+        _busy = True
     try:
         out, sample_rate = _client.synthesize(
             text,
@@ -105,4 +113,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         )
     except SystemExit as e:  # client 用 SystemExit 报错; 调度器只捕 Exception
         raise RuntimeError(f"TTS failed: {e.code or e}") from None
+    finally:
+        with _lock:
+            _busy = False
+            _last_use = time.time()
     return {"output_path": out, "sample_rate": sample_rate}

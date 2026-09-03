@@ -289,7 +289,12 @@ class H3Engine:
 
         self.progress_callback = on_progress
         p = H3Params()  # ctypes zero-initializes: ints=0, pointers=NULL
+        # char* fields need bytes; encode str here so every caller can pass
+        # plain paths (root-cause guard, not per-caller)
+        charp = ("output_path", "first_frame", "last_frame")
         for key, value in params.items():
+            if key in charp and isinstance(value, str):
+                value = value.encode()
             setattr(p, key, value)
         p.output_path = output_path.encode()
 
