@@ -17,9 +17,13 @@ class FakeEngine:
 
     def __init__(self, meta=None, progress_calls=(("denoise", 12, 48),)):
         self.calls = []
+        self.closed = False
         self.meta = meta or {"width": 864, "height": 480, "frames": 48,
                              "fps": 24, "sample_rate": 48000, "seed": 7}
         self.progress_calls = progress_calls
+
+    def close(self):
+        self.closed = True
 
     def generate(self, prompt, *, output_path, refs=None, on_progress=None, **overrides):
         self.calls.append({"prompt": prompt, "output_path": output_path,
@@ -39,6 +43,34 @@ def run_with(params, engine):
             result = video.run(params, Path(d), progress=lambda r, p="": None,
                                cancel=lambda: False)
         return result, engine.calls
+    finally:
+        video._engine = saved
+
+
+def test_engine_released_after_job():
+    eng = FakeEngine()
+    saved = video._engine
+    video._engine = eng
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            video.run({"prompt": "x"}, Path(d), progress=lambda r, p="": None,
+                      cancel=lambda: False)
+        assert eng.closed, "engine must be closed (memory released) after job"
+        assert video._engine is None, "singleton must be reset after close"
+    finally:
+        video._engine = saved
+
+
+def test_keep_loaded_keeps_engine():
+    eng = FakeEngine()
+    saved = video._engine
+    video._engine = eng
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            video.run({"prompt": "x", "keep_loaded": True}, Path(d),
+                      progress=lambda r, p="": None, cancel=lambda: False)
+        assert not eng.closed, "keep_loaded=True must keep the engine resident"
+        assert video._engine is eng
     finally:
         video._engine = saved
 

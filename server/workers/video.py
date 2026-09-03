@@ -112,11 +112,22 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
             raise VideoError("cancelled")
         progress(done / total if total else 0.0, phase)
 
+    # Release the 35GB engine after the job unless the caller explicitly asks
+    # to keep it resident (batch rendering). The scheduler's memory budget only
+    # counts *running* jobs — a resident engine would be invisible 35GB, so
+    # unload-by-default is what keeps the budget honest (doc §31 释放 Worker).
+    # close() also restores the process cwd that load() chdir'd away.
+    global _engine
     with _gen_lock:
         engine = _get_engine()
-        meta = engine.generate(
-            prompt, output_path=output_path, refs=refs,
-            on_progress=on_progress, **overrides)
+        try:
+            meta = engine.generate(
+                prompt, output_path=output_path, refs=refs,
+                on_progress=on_progress, **overrides)
+        finally:
+            if not params.get("keep_loaded"):
+                engine.close()
+                _engine = None
     if cancel():
         raise VideoError("cancelled")
     return {"output_path": output_path,

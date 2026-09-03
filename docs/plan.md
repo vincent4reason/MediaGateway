@@ -39,6 +39,7 @@
 
 ### Phase 3 — Voice Worker ✅
 - tts_server(:8001) 或直调，`/v1/voice/generate`：character voice_id + text → wav
+- 生命周期（已实现）：Gateway 按需拉起 tts_server，空闲 300s 自动退出；外部启动的 server 只用不杀
 
 ### Phase 4 — Music Worker（已定：独立部署）
 - clone `ace-step/ACE-Step` 到 `~/tool/ace-step`，下载 HF 原版权重（不走 ComfyUI）
@@ -51,6 +52,10 @@
 - 打通角色一致性链：reference → 分镜图 → first/last frame
 
 ### Phase 6 — 影策对接 + Agent
+- **前置：shell 脚本 Python 化（硬规则：仓库内禁止 *.sh，一切用 Python）**：
+  - `vendor/render/{concat,mux,freeze}.sh` → `server/render.py`（ffmpeg 子进程封装，供组合任务调用），完成后删除全部 .sh
+  - `scripts/start_tts.sh` 已随 voice 生命周期改造删除（Gateway 按需拉起/空闲退出）
+  - 后续任何新脚本一律 Python，不允许再引入 .sh
 - 组合任务 `POST /v1/shots/:id/render`（image→video→voice→music→ffmpeg）
 - 影策经 REST 提交任务、按路径取产物、登记资产
 - MCP server 暴露工具给 Claude Code / Codex
