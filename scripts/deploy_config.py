@@ -30,7 +30,9 @@ def build() -> dict:
             "MG_BUDGET_GB": "36",
             "MG_DB": os.path.join(ROOT, "data", "gateway.db"),
             "MG_ASSETS": os.path.join(ROOT, "assets"),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            # h3.c shells out to ffmpeg（homebrew）at the end of generation;
+            # launchd's default PATH would miss it
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         },
         "StandardOutPath": os.path.join(ROOT, "data", "gateway.log"),
         "StandardErrorPath": os.path.join(ROOT, "data", "gateway.err.log"),
