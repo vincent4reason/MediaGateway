@@ -23,7 +23,9 @@
 
 ## 阶段计划
 
-### Phase 1 — Gateway 骨架
+> 进度：P0–P5 全部完成并实机验收（2026-09-04）。P6 未开始。
+
+### Phase 1 — Gateway 骨架 ✅
 - FastAPI：jobs 表（SQLite）+ 内存队列 + 内存预算调度
 - **监听 :8600（接管旧 h3cweb 端口，有调用方）**：Phase 2 起必须兼容 h3cweb 现有 API 面
   （`/health` `/info` `/jobs` `/jobs/{id}` `/v1/videos*` `/files/{name}`），旧调用方无感迁移
@@ -31,11 +33,11 @@
 - 产物写 `assets/{job_id}/`，job 记录返回路径；不建资产库（Phase 6 对接影策 store）
 - 验收：curl 提交任务 → 轮询状态 → 拿到产物路径
 
-### Phase 2 — Video Worker
+### Phase 2 — Video Worker ✅
 - h3_bridge 接入，`/v1/video/generate`：prompt + refs + first/last frame → mp4
 - 超时 / kill / 重试 1 次；与 ：8600 旧 server 二选一（迁到 Gateway 后停旧进程）
 
-### Phase 3 — Voice Worker
+### Phase 3 — Voice Worker ✅
 - tts_server(:8001) 或直调，`/v1/voice/generate`：character voice_id + text → wav
 
 ### Phase 4 — Music Worker（已定：独立部署）
@@ -44,7 +46,7 @@
 - 薄 wrapper（常驻子进程或 CLI）→ wav；实测峰值内存填入调度配置 `mem_gb`
 - 验收：`/v1/music/generate`（emotion/genre/duration）→ 45s BGM wav
 
-### Phase 5 — Image Worker
+### Phase 5 — Image Worker ✅
 - iris.c（先 CLI 后 FFI），`/v1/image/generate` → png
 - 打通角色一致性链：reference → 分镜图 → first/last frame
 
