@@ -164,8 +164,8 @@ def test_mux_equivalent():
         fc = ("[1:a]volume=0.15,atrim=0:5.000000,asetpts=PTS-STARTPTS[bg];"
               "[2:a]volume=1.0,adelay=1500:all=1,atrim=0:5.000000,"
               "asetpts=PTS-STARTPTS[d0];"
-              "[0:a][bg][d0]amix=inputs=3:normalize=0:dropout_transition=0[aout];"
-              f"[0:v]subtitles=filename='{p('sub.srt')}':force_style='{STYLE}'[vout]")
+              f"[0:v]subtitles=filename='{p('sub.srt')}':force_style='{STYLE}'[vout]"
+              "[0:a][bg][d0]amix=inputs=3:normalize=0:dropout_transition=0[aout];")
         assert cmd == [str(FFMPEG), "-y",
                        "-i", p("v.mp4"),
                        "-stream_loop", "-1", "-i", p("bg.wav"),
@@ -176,12 +176,12 @@ def test_mux_equivalent():
                        "-c:a", "aac", "-b:a", "192k",
                        "-movflags", "+faststart", p("out.mp4")], cmd
 
-        # 无垫底、无台词：mix_in 只有 [0:a]，amix inputs=1（对照 .sh N=1 分支）
+        # 无垫底、无台词：不再跑无意义的 amix inputs=1（新语义：直接保留视频自带音轨）
         cmd = render.mux(p("v.mp4"), [], p("out.mp4"), p("sub.srt"), dry_run=True)
-        fc = ("[0:a]amix=inputs=1:normalize=0:dropout_transition=0[aout];"
-              f"[0:v]subtitles=filename='{p('sub.srt')}':force_style='{STYLE}'[vout]")
+        fc = f"[0:v]subtitles=filename='{p('sub.srt')}':force_style='{STYLE}'[vout]"
         assert cmd[2:4] == ["-i", p("v.mp4")] and cmd[4] == "-filter_complex"
         assert cmd[5] == fc and "-stream_loop" not in cmd, cmd
+        assert cmd[cmd.index("-map") + 1] == "[vout]" and "0:a" in cmd
 
 
 def test_mux_missing_track_file():
@@ -221,7 +221,7 @@ def test_freeze_equivalent():
         expected = [
             str(FFMPEG), "-y", "-v", "error", "-i", p("v.mp4"),
             "-filter_complex", _freeze_fc([(3.0, 2.0), (7.0, 1.5)]),
-            "-map", "[out1]",
+            "-map", "[out1]", "-map", "0:a?",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "copy", p("out.mp4"),
         ]
         # 字符串形式（与 .sh 的 "T1:D1;T2:D2" 完全同接口）
@@ -231,6 +231,30 @@ def test_freeze_equivalent():
         cmd2 = render.freeze(p("v.mp4"), [(3.0, 2.0), (7.0, 1.5)],
                              p("out.mp4"), dry_run=True)
         assert cmd2 == cmd, cmd2
+
+
+def test_mux_silent_video_uses_anullsrc():
+    """无自带音轨的视频 + 音轨 → anullsrc 起底，不再引用不存在的 [0:a]。"""
+    with env(FFMPEG_BIN=str(FFMPEG), FFPROBE_BIN=str(FFPROBE),
+             FAKE_NO_AUDIO="1", FAKE_DURATION="5.000000"):
+        cmd = render.mux(p("v.mp4"), [{"path": p("d1.wav"), "start": 0}],
+                         p("out.mp4"), dry_run=True)
+        assert "-f" in cmd and "lavfi" in cmd and "anullsrc" in " ".join(cmd)
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "[1:a]" in fc and "[0:a]" not in fc, fc
+        assert "amix=inputs=3" in fc, fc  # anullsrc + d1 + ... 视频不计
+
+
+def test_mux_rejects_bad_subtitle_path():
+    with env(FFMPEG_BIN=str(FFMPEG), FFPROBE_BIN=str(FFPROBE),
+             FAKE_DURATION="5"):
+        bad = D / "sub'quote.srt"
+        bad.write_bytes(b"")
+        try:
+            render.mux(p("v.mp4"), [], p("out.mp4"), str(bad), dry_run=True)
+            assert False, "路径含单引号必须早失败"
+        except render.RenderError as e:
+            assert "filtergraph" in str(e)
 
 
 def test_freeze_bad_points():

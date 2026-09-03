@@ -6,6 +6,7 @@ Run: .venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8600
 from __future__ import annotations
 
 import threading
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -22,6 +23,15 @@ class JobIn(BaseModel):
     type: str
     params: dict = {}
     priority: int = 0
+
+
+class ShotIn(BaseModel):
+    """Composite shot spec — each stage dict is optional but one is required."""
+    image: Optional[dict] = None
+    video: Optional[dict] = None
+    voice: Optional[dict] = None
+    music: Optional[dict] = None
+    mix: Optional[dict] = None
 
 
 @app.on_event("startup")
@@ -65,3 +75,10 @@ def cancel_job(job_id: str):
     if not core.cancel_job(job_id):
         raise HTTPException(409, "job not cancellable (unknown/finished)")
     return core.get_job(job_id)
+
+
+@app.post("/v1/shots/{shot_id}/render")
+def render_shot(shot_id: str, req: ShotIn):
+    params = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    params["shot_id"] = shot_id
+    return core.create_job("shot", params)

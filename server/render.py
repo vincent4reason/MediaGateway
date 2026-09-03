@@ -51,6 +51,21 @@ def _run(cmd: Sequence[str], timeout: float) -> None:
         raise RenderError(f"ffmpeg 失败(exit {proc.returncode}): {' '.join(cmd)}\n{tail}")
 
 
+def _filter_escape_path(path: str) -> str:
+    """ffmpeg filtergraph option values choke on ' : \\ — reject early with a
+    clear error instead of a cryptic filter parse failure. Generated asset
+    paths never contain these; only user-supplied paths can."""
+    bad = [c for c in ("'", ":", "\\") if c in path]
+    if bad:
+        raise RenderError(f"路径含 filtergraph 非法字符 {bad}: {path}")
+    return path
+
+
+def _concat_escape(path: str) -> str:
+    """Escape for concat demuxer list files (file '<path>')."""
+    return path.replace("'", "'\\''")
+
+
 def _probe(path: str, select_audio: bool) -> str:
     """ffprobe stdout (stripped). select_audio=True → audio stream index list."""
     cmd = [_bin("ffprobe", "FFPROBE_BIN"), "-v", "error"]
@@ -92,7 +107,7 @@ def concat(
         fd, list_path = tempfile.mkstemp(suffix=".txt", prefix="concat_")
         with os.fdopen(fd, "w") as fh:
             for f in inputs:
-                fh.write(f"file '{f}'\n")
+                fh.write(f"file '{_concat_escape(f)}'\n")
         cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y", "-f", "concat", "-safe", "0",
                "-i", list_path, "-c", "copy", output]
         if dry_run:
@@ -145,7 +160,7 @@ def mux(
     video: str,
     audio_tracks: List[dict],
     output: str,
-    subtitles: str,
+    subtitles: str | None = None,  # None = 不烧字幕
     subtitle_style: str = DEFAULT_SUBTITLE_STYLE,
     dialogue_volume: float = 1.0,
     music_volume: float = 0.15,
@@ -153,7 +168,13 @@ def mux(
     dry_run: bool = False,
 ) -> List[str]:
     _check_file(video)
-    _check_file(subtitles)
+    if subtitles:
+        _check_file(subtitles)
+        _filter_escape_path(subtitles)
+
+    # 视频是否自带音轨：h3 输出总有音轨，但外部输入的视频可能没有；
+    # 无音轨时用 anullsrc 作为 amix 的起底，否则 filter 引用 [0:a] 直接失败
+    has_own_audio = bool(_probe(video, select_audio=True))
 
     # 視頻時長（原始字符串，透傳給 atrim），用於裁剪循環音軌和超長台詞
     vdur = _probe(video, select_audio=False)
@@ -164,9 +185,14 @@ def mux(
 
     inputs = ["-i", video]
     fc = ""
-    n = 1          # 輸入序號：0=視頻, 1=墊底(如有), 2..=台詞
+    if has_own_audio:
+        n = 1          # 輸入序號：0=視頻, 1=墊底(如有), 2..=台詞
+        mix_in = "[0:a]"
+    else:
+        inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        n = 2          # 1=anullsrc 起底, 2..=音軌
+        mix_in = "[1:a]"
     dlg = 0        # 台詞標籤序號，獨立於是否有墊底
-    mix_in = "[0:a]"
 
     for t in audio_tracks:
         path = t["path"]
@@ -190,14 +216,24 @@ def mux(
         n += 1
 
     # normalize=0 保持各軌原音量（默認按輸入數均分，台詞會被削掉）
-    fc += f"{mix_in}amix=inputs={n}:normalize=0:dropout_transition=0[aout];"
-    fc += f"[0:v]subtitles=filename='{subtitles}':force_style='{subtitle_style}'[vout]"
+    has_audio = n > 1  # n 起始為 1（視頻自身），>1 說明有額外音軌
+    if subtitles:
+        fc += f"[0:v]subtitles=filename='{subtitles}':force_style='{subtitle_style}'[vout]"
+        vmap = "[vout]"
+    else:
+        vmap = "0:v"
+    if has_audio:
+        fc += f"{mix_in}amix=inputs={n}:normalize=0:dropout_transition=0[aout];"
+        amap = "[aout]"
+    else:
+        amap = "0:a"  # 無額外音軌：保留視頻自帶音軌
 
-    cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y"] + inputs + [
-        "-filter_complex", fc,
-        "-map", "[vout]", "-map", "[aout]",
-        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output]
+    cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y"] + inputs
+    if fc:
+        cmd += ["-filter_complex", fc]
+    cmd += ["-map", vmap, "-map", amap,
+            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output]
     if not dry_run:
         _run(cmd, timeout)
     return cmd
@@ -205,6 +241,8 @@ def mux(
 
 # --- freeze.sh: 在指定時刻定格畫面（後期卡點）---
 # points: "T1:D1;T2:D2" 字符串或 [(t, d), ...] — 在 T 秒處定格 D 秒（可多個）
+# 假定 24fps 輸入（h3 固定 24fps）。已知限制：音轨原样保留（-map 0:a?），
+# 定格延长的尾段是静音 — 需要卡点后仍有声时先 mux 再 freeze。
 
 def freeze(
     video: str,
@@ -227,6 +265,9 @@ def freeze(
         pts = [(float(t), float(d)) for t, d in points]
     if not pts:
         raise RenderError("卡點表為空")
+    for t, d in pts:
+        if t < 0 or d <= 0:
+            raise RenderError(f"卡點時間需 t>=0 且 d>0，得到 t={t} d={d}")
 
     # 卡點時間用「當前流時間線」：原始時間 + 已累積的定格偏移
     # 3 路 split → trim 前段 + freeze 段（tpad 克隆）+ 後段 → concat
@@ -249,8 +290,9 @@ def freeze(
 
     fc = ";".join(filters)
     final = f"[out{len(pts) - 1}]"
+    # -map 0:a? : 保留音轨（原长，定格尾段静音）；不加 -map 会连音轨一起丢
     cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y", "-v", "error", "-i", video,
-           "-filter_complex", fc, "-map", final,
+           "-filter_complex", fc, "-map", final, "-map", "0:a?",
            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "copy", output]
     if not dry_run:
         _run(cmd, timeout)

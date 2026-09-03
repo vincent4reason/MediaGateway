@@ -29,7 +29,8 @@
 
 ## 阶段计划
 
-> 进度：P0–P5 全部完成并实机验收（2026-09-04）。P6 未开始。
+> 进度：P0–P5 + 部署切换 + P4 音乐全部完成并实机验收（2026-09-04）。
+> P6 组合任务（shot worker）已实现，影策对接待做。
 
 ### Phase 1 — Gateway 骨架 ✅
 - FastAPI：jobs 表（SQLite）+ 内存队列 + 内存预算调度
@@ -47,11 +48,10 @@
 - tts_server(:8001) 或直调，`/v1/voice/generate`：character voice_id + text → wav
 - 生命周期（已实现）：Gateway 按需拉起 tts_server，空闲 300s 自动退出；外部启动的 server 只用不杀
 
-### Phase 4 — Music Worker（已定：独立部署）
-- clone `ace-step/ACE-Step` 到 `~/tool/ace-step`，下载 HF 原版权重（不走 ComfyUI）
-- **权重下载安排在 Phase 4 开始时**（已确认不提前）
-- 薄 wrapper（常驻子进程或 CLI）→ wav；实测峰值内存填入调度配置 `mem_gb`
-- 验收：`/v1/music/generate`（emotion/genre/duration）→ 45s BGM wav
+### Phase 4 — Music Worker ✅
+- `~/tool/ace-step`：官方 repo + `ACE-Step/Ace-Step1.5` 权重 9.4GB，MPS 正常
+- 实测：45s BGM 暖 17s，峰值 RSS 14.8GB → `MEM_GB=15`；输出 48kHz WAV
+- LM/thinking 歌词路径未启用（需要时再开）
 
 ### Phase 5 — Image Worker ✅
 - iris.c（先 CLI 后 FFI），`/v1/image/generate` → png
@@ -71,7 +71,8 @@
 ## 部署形态
 
 ```
-launchd: com.aifilm.gateway （单 Python 进程 :8080，Worker 为其子进程/线程）
+launchd: com.aifilm.gateway （单 Python 进程 **127.0.0.1:8600**，MG_BUDGET_GB=36，
+Worker 为其子进程/线程；预算 36 + tts_server 空闲常驻 8.7 ≈ 物理上限 45GB，留 3GB 系统余量）
 ```
 
 无容器、无 Redis、无 PostgreSQL。
@@ -83,3 +84,23 @@ launchd: com.aifilm.gateway （单 Python 进程 :8080，Worker 为其子进程/
 | h3 独占 48GB 内存 | Phase 2 起用互斥锁，实测后再细化优先级 |
 | 与 ：8600 旧 server 并存冲突 | 部署切换时：确认无运行中任务 → 停旧 h3cweb server（已冻结，projects 数据只读保留）→ launchd 起 Gateway |
 | ACE-Step 未知 | Phase 4 先最小验证再接入 |
+
+## API 契约速查（影策对接必读）
+
+同一引擎多入口的响应字段映射（GET 单个 job）：
+
+| 入口 | id 字段 | 状态词表 | 独有字段 |
+|---|---|---|---|
+| `GET /v1/jobs/{id}` | `id` | queued/running/completed/failed/cancelled | params、meta、progress、phase |
+| `GET /jobs/{id}`（h3cweb 兼容） | `job_id` | 同上；**cancelled 对旧调用方显示 failed** | phase、progress |
+| `GET /v1/videos/{id}`（Sora 风格） | `id` | queued/**in_progress**/completed/failed | progress |
+
+提交入口与产物：`POST /v1/jobs` 与 `POST /jobs` 响应结构不同（整行 vs {job_id,status,output_path}）；
+新产物统一在 `assets/{job_id}/`，经 `/v1/videos/{id}/content` 或直接路径取，`/files/{name}` 只服务 h3cweb 历史文件。
+
+## 已知限制（审查结论，接受现状）
+
+1. **video job 无超时中断** — h3 引擎在进程内，挂起时无法安全强杀；需 `launchctl kickstart -k gui/501/com.aifilm.gateway` 重启（启动时自动把遗留 running job 标记 failed）
+2. **cancel 是协作语义** — 已进入不可中断段（生成中）的任务可能 cancel 后仍 completed；以最终 status 为准
+3. **freeze 定格尾段静音** — 音轨原样保留不延长；需要卡点带声先 mux 再 freeze
+4. **参数命名**：video 用 `seconds`，music 用 `duration_s`（历史约定，meta 字段名见各 worker 返回）
