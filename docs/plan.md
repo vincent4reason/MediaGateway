@@ -13,6 +13,12 @@
 3. **不引入 Redis / PostgreSQL / Docker** — 单机 launchd + SQLite（仅 job 状态）+ 文件系统。
 4. **Voice = cosyvoice**（非文档的 Qwen3-TTS MLX）；qwen LLM 与 qwen-asr 不在计划内。
 5. 3D 导演台（§11）不在 Gateway 范围，归影策。
+6. **h3cweb 冻结**（已确认）— 全面迁 Gateway：旧 projects 数据保留只读，
+   旧 server 于部署切换时停止，新能力只进 MediaGateway。
+7. **MCP 只在影策侧**（已确认）— 按文档 §27 分层 Agent→MCP→影策→Gateway，
+   Gateway 只出 REST，不做自己的 MCP。
+8. **调度行为（已定）**— 严格 FIFO 队头阻塞，video 失败不重试即 failed；
+   Worker 用完即关（keep_loaded 可选常驻），仓库禁止 *.sh。
 
 ## Gateway 职责（收窄后）
 
@@ -35,7 +41,7 @@
 
 ### Phase 2 — Video Worker ✅
 - h3_bridge 接入，`/v1/video/generate`：prompt + refs + first/last frame → mp4
-- 超时 / kill / 重试 1 次；与 ：8600 旧 server 二选一（迁到 Gateway 后停旧进程）
+- 超时 / kill；**失败不重试即 failed**（已确认，行为可预测优先）
 
 ### Phase 3 — Voice Worker ✅
 - tts_server(:8001) 或直调，`/v1/voice/generate`：character voice_id + text → wav
@@ -58,7 +64,9 @@
   - 后续任何新脚本一律 Python，不允许再引入 .sh
 - 组合任务 `POST /v1/shots/:id/render`（image→video→voice→music→ffmpeg）
 - 影策经 REST 提交任务、按路径取产物、登记资产
-- MCP server 暴露工具给 Claude Code / Codex
+- **Gateway 不做 MCP**（已确认）— MCP 归影策（§27：Agent→MCP→影策→Gateway）
+- **验收标准（已确认）：自然语言一句话 → 完整 shot**（图+视频+配音+BGM+混音成片），
+  链路经影策 Agent 驱动 Gateway 完成
 
 ## 部署形态
 
@@ -73,5 +81,5 @@ launchd: com.aifilm.gateway （单 Python 进程 :8080，Worker 为其子进程/
 | 风险 | 对策 |
 |---|---|
 | h3 独占 48GB 内存 | Phase 2 起用互斥锁，实测后再细化优先级 |
-| 与 ：8600 旧 server 并存冲突 | Phase 2 迁移完成后 launchd 停旧进程 |
+| 与 ：8600 旧 server 并存冲突 | 部署切换时：确认无运行中任务 → 停旧 h3cweb server（已冻结，projects 数据只读保留）→ launchd 起 Gateway |
 | ACE-Step 未知 | Phase 4 先最小验证再接入 |
