@@ -1,0 +1,10 @@
+{
+  "C001": {
+    "prompt_wav": "/Users/vincent/code/h3cweb/projects/p001/input/苏晚_粤语.wav",
+    "prompt_text": "You are a helpful assistant.<|endofprompt|>食粽当然要食咸嘅，鲜肉咸蛋黄，先至系地道滋味。"
+  },
+  "C002": {
+    "prompt_wav": "/Users/vincent/code/h3cweb/projects/p001/input/aila_ref_voice.wav",
+    "prompt_text": "You are a helpful assistant.<|endofprompt|>嗨，我是艾拉，很高兴见到你。"
+  }
+}
