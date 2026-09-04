@@ -180,6 +180,32 @@ def test_audio_speech_model_falls_back_to_voice():
             core.create_job, core.get_job = saved
 
 
+def test_audio_speech_qwen_routes_to_tts_qwen():
+    """model qwen* -> tts_qwen job; plugin-coalesced voice (== model) is dropped."""
+    with tempfile.TemporaryDirectory() as d:
+        fake = FakeJob(str(Path(d) / "o.wav"))
+        saved = (core.create_job, core.get_job)
+        core.create_job, core.get_job = fake.create, fake.get
+        try:
+            client = TestClient(app)
+            r = client.post("/v1/audio/speech", json={
+                "input": "你好", "model": "qwen3-tts", "voice": "qwen3-tts"})
+            assert r.status_code == 200, r.text
+            assert fake.calls[0][0] == "tts_qwen"
+            assert "voice" not in fake.calls[0][1]
+            r = client.post("/v1/audio/speech", json={
+                "input": "你好", "model": "tts_qwen", "voice": "Vivian"})
+            assert r.status_code == 200, r.text
+            assert fake.calls[1][0] == "tts_qwen"
+            assert fake.calls[1][1]["voice"] == "Vivian"
+            # non-qwen model still routes to the cosyvoice voice worker
+            r = client.post("/v1/audio/speech", json={"input": "你好", "model": "C002"})
+            assert r.status_code == 200, r.text
+            assert fake.calls[2][0] == "voice"
+        finally:
+            core.create_job, core.get_job = saved
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

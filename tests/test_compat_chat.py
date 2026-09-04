@@ -90,8 +90,8 @@ def make_llm_stub(resident=True, mem=16.0):
 def fresh_db():
     d = tempfile.mkdtemp(prefix="chat_test_db_")
     core.DB_PATH = Path(d) / "gateway.db"
-    with core._db_init_lock:
-        core._conn = None
+    core._db_initialized = False
+    core._tls.conn = None
     return core.db()
 
 

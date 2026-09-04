@@ -78,35 +78,46 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority DESC, created_at);
 """
 
-_conn: sqlite3.Connection | None = None
+_tls = threading.local()
 _lock = threading.Lock()
 _db_init_lock = threading.Lock()
+_db_initialized = False
 
 
 def db() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
-        with _db_init_lock:  # first request and scheduler thread can race here
-            if _conn is None:
+    # one connection per thread — a single shared connection raced request-thread
+    # reads against scheduler writes and corrupted page cache ("file is not a
+    # database"); WAL + busy_timeout makes per-thread connections safe and cheap.
+    conn = getattr(_tls, "conn", None)
+    if conn is not None:
+        return conn
+    global _db_initialized
+    if not _db_initialized:
+        with _db_init_lock:
+            if not _db_initialized:
                 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA busy_timeout=5000")
-                conn.executescript(_SCHEMA)
+                init = sqlite3.connect(DB_PATH)
+                init.execute("PRAGMA journal_mode=WAL")
+                init.executescript(_SCHEMA)
                 # crash recovery: running jobs died with the old process —
                 # their threads are gone; leaving them 'running' would poison
                 # the memory budget forever. Queued jobs are still valid.
-                cur = conn.execute(
+                cur = init.execute(
                     "UPDATE jobs SET status='failed', "
                     "error='interrupted by gateway restart', finished_at=? "
                     "WHERE status='running'", (time.time(),))
                 if cur.rowcount:
                     print(f"[core] recovered {cur.rowcount} orphaned running job(s)",
                           flush=True)
-                conn.commit()
-                _conn = conn
-    return _conn
+                init.commit()
+                init.close()
+                _db_initialized = True
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    _tls.conn = conn
+    return conn
 
 
 def _job_row(r) -> dict:

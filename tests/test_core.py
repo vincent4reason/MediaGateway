@@ -14,12 +14,18 @@ sys.path.insert(0, str(ROOT))
 from server import core  # noqa: E402
 
 
+def _reset_core_db(path: Path | None = None):
+    """Drop cached connections; optionally point core at a new temp DB."""
+    if path is None:
+        d = tempfile.mkdtemp(prefix="core_test_")
+        path = Path(d) / "gateway.db"
+    core.DB_PATH = path
+    core._db_initialized = False
+    core._tls.conn = None  # drop this thread's cached connection
+
+
 def _fresh_db():
-    """Point core at a new temp DB and reset the cached connection."""
-    d = tempfile.mkdtemp(prefix="core_test_")
-    core.DB_PATH = Path(d) / "gateway.db"
-    with core._db_init_lock:
-        core._conn = None
+    _reset_core_db()
     return core.db()
 
 
@@ -30,9 +36,9 @@ def test_startup_recovery_marks_running_failed():
     db.execute("INSERT INTO jobs (id, type, status, created_at) "
                "VALUES ('x2', 'video', 'queued', 0)")
     db.commit()
-    # simulate restart: drop cached conn, reopen (recovery runs on init)
-    with core._db_init_lock:
-        core._conn = None
+    # simulate restart: same path, but drop cached conn + init flag
+    same_path = Path(db.execute("PRAGMA database_list").fetchone()[2])
+    _reset_core_db(same_path)
     db2 = core.db()
     assert db2.execute("SELECT status FROM jobs WHERE id='x1'").fetchone()[0] == "failed"
     assert db2.execute("SELECT status FROM jobs WHERE id='x2'").fetchone()[0] == "queued"

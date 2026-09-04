@@ -166,15 +166,25 @@ def _known_voice(model: Optional[str]) -> Optional[str]:
         return None
 
 
+def _is_qwen(model: Optional[str]) -> bool:
+    return bool(model) and (model.startswith("qwen") or model == "tts_qwen")
+
+
 @router.post("/v1/audio/speech")
 def audio_speech(req: SpeechIn, request: Request):
     if not req.input.strip():
         raise HTTPException(400, "input is required")
-    voice = req.voice or _known_voice(req.model)
-    params = {"text": req.input, "speed": req.speed}
-    if voice:
-        params["voice"] = voice  # else voice worker uses its default voice
-    job = core.create_job("voice", params)
+    params: dict = {"text": req.input, "speed": req.speed}
+    if _is_qwen(req.model):  # second voice engine: mlx-audio Qwen3-TTS
+        jtype = "tts_qwen"
+        if req.voice and req.voice != req.model:
+            params["voice"] = req.voice  # plugin coalesces voice to model key
+    else:
+        jtype = "voice"
+        voice = req.voice or _known_voice(req.model)
+        if voice:
+            params["voice"] = voice  # else voice worker uses its default voice
+    job = core.create_job(jtype, params)
     job = _wait_job(job["id"], timeout=300)
     base = str(request.base_url).rstrip("/")
     return {"url": f"{base}/v1/audio/jobs/{job['id']}/content"}
