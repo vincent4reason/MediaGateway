@@ -36,6 +36,7 @@ CMD = shlex.split(os.environ.get("QWEN_SERVE_CMD") or _DEFAULT_CMD)
 _proc: subprocess.Popen | None = None
 _last_use = 0.0
 _busy = False           # a chat completion is in flight — never kill while set
+_loading = False        # ensure() is spawning/waiting for readiness — counts as resident
 _unload_pending = False  # core asked for memory back; fire at next non-busy tick
 _lock = threading.RLock()
 _known = False          # cached port-health, so core's 0.5s poll doesn't hammer /health
@@ -50,12 +51,20 @@ def _healthy() -> bool:
         return False
 
 
+def busy() -> bool:
+    """True while a chat is in flight or the server is mid-spawn — the
+    scheduler must wait instead of pulling memory out from under us."""
+    with _lock:
+        return _busy or _loading
+
+
 def resident() -> bool:
-    """True while LLM memory is occupied (our proc alive, or something serves
-    the port). Cached for 5s — safe for the scheduler's tight poll loop."""
+    """True while LLM memory is occupied (our proc alive, mid-spawn, or
+    something serves the port). Cached for 5s — safe for the scheduler's
+    tight poll loop."""
     global _known, _checked
     with _lock:
-        if _proc is not None and _proc.poll() is None:
+        if _loading or (_proc is not None and _proc.poll() is None):
             return True
         if time.time() - _checked < 5:
             return _known
@@ -76,40 +85,54 @@ def _port_pids() -> list[int]:
 
 def ensure(timeout: float = READY_TIMEOUT_S):
     """Server ready for a chat request: adopt an external one or spawn ours."""
-    global _last_use, _proc, _unload_pending
+    global _last_use, _proc, _unload_pending, _loading
     with _lock:
         _last_use = time.time()
         _unload_pending = False
     if _healthy():
         return
     with _lock:
+        # counts as resident() so the scheduler won't admit a 35GB video job
+        # while we're mid-spawn (TOCTOU: port isn't bound yet)
+        _loading = True
         if _proc is None or _proc.poll() is not None:
             log = open(QWEN_DIR / "serve.log", "a")
             log.write(f"\n[llm.py] spawn {time.strftime('%F %T')} {' '.join(CMD)}\n")
             log.flush()
             _proc = subprocess.Popen(CMD, cwd=QWEN_DIR, stdout=log, stderr=log)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _healthy():
-            return
+            log.close()
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if _healthy():
+                return
+            with _lock:
+                proc = _proc
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(
+                    f"qwen serve exited code={proc.returncode} (log: {QWEN_DIR}/serve.log)")
+            time.sleep(1)
+        raise RuntimeError(f"qwen serve not ready after {timeout}s (log: {QWEN_DIR}/serve.log)")
+    finally:
         with _lock:
-            proc = _proc
-        if proc is not None and proc.poll() is not None:
-            raise RuntimeError(
-                f"qwen serve exited code={proc.returncode} (log: {QWEN_DIR}/serve.log)")
-        time.sleep(1)
-    raise RuntimeError(f"qwen serve not ready after {timeout}s (log: {QWEN_DIR}/serve.log)")
+            _loading = False
 
 
 def unload() -> bool:
     """Stop the server and free its memory. Returns True once the port is dark."""
     global _proc, _unload_pending, _known, _checked
     with _lock:
+        if _busy or _loading:
+            # never kill mid-generation or mid-spawn; watchdog retries later
+            _unload_pending = True
+            return False
         _unload_pending = False
         proc, _proc = _proc, None
         _known, _checked = False, 0.0
     if proc is not None and proc.poll() is None:
         proc.terminate()  # wrapper may not reap its server child — port sweep below catches that
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=3)
     deadline = time.time() + 10
     while True:
         pids = _port_pids()

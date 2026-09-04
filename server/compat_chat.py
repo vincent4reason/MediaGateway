@@ -39,18 +39,36 @@ def _video_running() -> bool:
     return bool(rows)
 
 
+def _busy_response() -> JSONResponse:
+    return JSONResponse(status_code=503, content={
+        "error": {"message": "视频生成中，LLM 排队稍后重试", "type": "busy",
+                  "retryable": True}})
+
+
 @router.post("/v1/chat/completions")
 def chat_completions(req: ChatRequest):
     if req.stream:
         return JSONResponse(status_code=400, content={
             "error": {"message": "stream=true 不支持，请用非流式请求", "type": "invalid_request_error"}})
     if _video_running():
-        return JSONResponse(status_code=503, content={
-            "error": {"message": "视频生成中，LLM 排队稍后重试", "type": "busy",
-                      "retryable": True}})
+        return _busy_response()
     llm.ensure()
+    # re-check after the (possibly 10s+) spawn: a video job may have been
+    # admitted meanwhile — loading 19GB + 35GB together would OOM
+    if _video_running():
+        return _busy_response()
     body = req.model_dump(exclude_none=True)
     with llm.busy_guard():
-        r = httpx.post(f"{llm.BASE_URL}/v1/chat/completions", json=body,
-                       timeout=UPSTREAM_TIMEOUT_S)
-    return JSONResponse(status_code=r.status_code, content=r.json())
+        try:
+            r = httpx.post(f"{llm.BASE_URL}/v1/chat/completions", json=body,
+                           timeout=UPSTREAM_TIMEOUT_S)
+        except httpx.HTTPError as e:
+            return JSONResponse(status_code=502, content={
+                "error": {"message": f"LLM upstream unreachable: {e}", "type": "upstream_error"}})
+    try:
+        payload = r.json()
+    except ValueError:
+        return JSONResponse(status_code=502, content={
+            "error": {"message": f"LLM upstream returned non-JSON ({r.status_code})",
+                      "type": "upstream_error"}})
+    return JSONResponse(status_code=r.status_code, content=payload)

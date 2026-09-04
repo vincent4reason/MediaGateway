@@ -86,6 +86,58 @@ def test_image_size_rounding_and_bad_size():
             core.create_job, core.get_job = saved
 
 
+def test_image_edits_passes_references():
+    with tempfile.TemporaryDirectory() as d:
+        fake = FakeJob(str(Path(d) / "o.png"))
+        saved = (core.create_job, core.get_job)
+        core.create_job, core.get_job = fake.create, fake.get
+        try:
+            client = TestClient(app)
+            r = client.post("/v1/images/edits",
+                            data={"prompt": "a cat holding it", "size": "1024x1024"},
+                            files=[("image", ("a.png", _png_bytes(), "image/png")),
+                                   ("image", ("b.png", _png_bytes(), "image/png"))])
+            assert r.status_code == 200, r.text
+            assert base64.b64decode(r.json()["data"][0]["b64_json"])[:8] == b"\x89PNG\r\n\x1a\n"
+            refs = fake.calls[0][1]["input"]
+            assert len(refs) == 2 and refs[0].endswith("ref_0.png") and refs[1].endswith("ref_1.png")
+            # jpeg magic passes through with .jpg suffix; garbage (webp/heic-like) -> ffmpeg -> 400
+            r = client.post("/v1/images/edits", data={"prompt": "x"},
+                            files=[("image", ("c.jpg", b"\xff\xd8\xff\xe0jpegbody", "image/jpeg"))])
+            assert r.status_code == 200, r.text
+            assert fake.calls[1][1]["input"][0].endswith("ref_0.jpg")
+            r = client.post("/v1/images/edits", data={"prompt": "x"},
+                            files=[("image", ("d.webp", b"RIFFxxxxWEBP garbage", "image/webp"))])
+            assert r.status_code == 400, r.text
+        finally:
+            core.create_job, core.get_job = saved
+
+
+def test_image_edits_rejects_bad_input():
+    client = TestClient(app)
+    r = client.post("/v1/images/edits", data={"prompt": "x"})
+    assert r.status_code == 400
+    r = client.post("/v1/images/edits", data={"prompt": "x"},
+                    files=[("image", ("a.png", _png_bytes(), "image/png")),
+                           ("mask", ("m.png", _png_bytes(), "image/png"))])
+    assert r.status_code == 400
+
+
+def test_image_worker_validates_references():
+    from server.workers import image as image_worker
+    with tempfile.TemporaryDirectory() as d:
+        for params, msg in [
+            ({"prompt": "x", "input": str(Path(d) / "missing.png")}, "input image not found"),
+            ({"prompt": "x", "input": ["/no/a.png"] * 17}, "at most 16"),
+            ({"prompt": "x", "input": "/no/a.png"}, "input image not found"),
+        ]:
+            try:
+                image_worker.run(params, Path(d), lambda *a: None, lambda: False)
+                raise AssertionError(f"expected ValueError for {params}")
+            except ValueError as e:
+                assert msg in str(e)
+
+
 def test_audio_speech_returns_url_and_content():
     with tempfile.TemporaryDirectory() as d:
         wav = str(Path(d) / "o.wav")

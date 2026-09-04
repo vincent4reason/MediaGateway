@@ -34,6 +34,7 @@ from pathlib import Path
 from . import workers as workers_pkg
 
 BASE = Path(__file__).resolve().parent.parent
+_LLM_MODULE = "server.llm"  # optional face; absence => scheduler behaviour unchanged
 DB_PATH = Path(os.environ.get("MG_DB", BASE / "data" / "gateway.db"))
 ASSET_ROOT = Path(os.environ.get("MG_ASSETS", BASE / "assets"))
 BUDGET_GB = float(os.environ.get("MG_BUDGET_GB", "40"))
@@ -187,7 +188,7 @@ def _resident_gb(reg: dict) -> float:
     proc = getattr(voice_mod, "_proc", None) if voice_mod else None
     if voice_mod is not None and proc is not None and proc.poll() is None:
         gb += voice_mod.MEM_GB
-    llm_mod = sys.modules.get(f"{__package__}.llm")  # absent => no LLM face loaded
+    llm_mod = sys.modules.get(_LLM_MODULE)  # absent => no LLM face loaded
     if llm_mod is not None and llm_mod.resident():
         gb += llm_mod.MEM_GB
     return gb
@@ -211,10 +212,13 @@ def _admit_next() -> tuple[str, dict] | None:
         # LLM. Ask it to unload, skip this round; the next poll re-checks until
         # the LLM process is gone. Absent llm module => behaviour unchanged.
         if row["type"] in ("video", "shot"):
-            llm_mod = sys.modules.get(f"{__package__}.llm")
-            if llm_mod is not None and llm_mod.resident():
-                getattr(llm_mod, "request_unload", lambda: None)()
-                break
+            llm_mod = sys.modules.get(_LLM_MODULE)
+            if llm_mod is not None:
+                if getattr(llm_mod, "busy", lambda: False)():
+                    break  # chat in flight / mid-spawn — wait it out, no thrash
+                if llm_mod.resident():
+                    getattr(llm_mod, "request_unload", lambda: None)()
+                    break
         if running_gb + worker.MEM_GB <= BUDGET_GB:
             return worker, _job_row(row)
         # budget-blocked: stop at first job that doesn't fit (FIFO head blocking

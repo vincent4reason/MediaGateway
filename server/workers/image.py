@@ -47,8 +47,12 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     if seed is None:  # CLI requires an explicit --seed; pick one for "random"
         seed = random.randint(0, 2**31 - 1)
     ref = params.get("input")
-    if ref and not Path(ref).is_file():
-        raise ValueError(f"input image not found: {ref}")
+    refs = [ref] if isinstance(ref, str) else list(ref or [])
+    if len(refs) > 16:  # iris MAX_INPUT_IMAGES
+        raise ValueError("at most 16 reference images supported")
+    for r in refs:
+        if not Path(r).is_file():
+            raise ValueError(f"input image not found: {r}")
     timeout = float(params.get("timeout", DEFAULT_TIMEOUT))
 
     out = job_dir / "image.png"
@@ -63,8 +67,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         "-H", str(height),
         "-o", str(out),
     ]
-    if ref:
-        cmd += ["-i", str(ref)]
+    for r in refs:
+        cmd += ["-i", str(r)]
 
     # cancel() is checked once before launch; the running subprocess cannot be
     # interrupted — cancellation takes effect at the next scheduling round.

@@ -85,7 +85,7 @@
   - LLM 进程生命周期 = voice 同款：按需拉起 + 空闲退出（退出阈值要比 TTS 激进，如 120s）
   - **内存互斥策略**：`mem_gb` 记 LLM 实测常驻（~16GB）；视频任务 admission 前若 LLM 常驻，
     先请求卸载 LLM 并等待退出完成再加载 h3；LLM 请求到达时若 h3 在跑则排队
-  - 实测峰值内存填入调度配置
+  - 实测峰值内存 19.3GB 已入调度；LLM 忙碌中视频等待、请求中视频到达返回 503 重试语义（非阻塞排队）
 - 影策侧：渠道模型 `qwen3.8-27b`（capability=text，protocol=openai-chat-completions /
   newapi-chat，取实际可用的）→ 设置里默认文本模型可选
 - 验收：影策画布文本任务（提示词改写/剧本）走本地 LLM；同一时段 video 与 LLM 互斥不 OOM
