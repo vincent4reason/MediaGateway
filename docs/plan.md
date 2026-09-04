@@ -49,6 +49,12 @@
 - tts_server(:8001) 或直调，`/v1/voice/generate`：character voice_id + text → wav
 - 生命周期（已实现）：Gateway 按需拉起 tts_server，空闲 300s 自动退出；外部启动的 server 只用不杀
 
+### Phase 3.5 — 第二声音引擎:mlx-audio + Qwen3-TTS MLX ✅（2026-09-04 追加，回归文档原案）
+- `~/tool/mlx-audio`(0.5.1)+ `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16`(4.2GB)
+- 实测:加载 7.4s / 1.1s 每 2.9s 音频 / 峰值 8.6GB → MEM_GB=9,24kHz,speaker 预设(serena 等)
+- `/v1/audio/speech` 按 model 分流(qwen*/tts_qwen);影策 MODEL_000014 qwen3-tts,E2E ✓
+- 参考克隆需 Base 变体(ref_audio 参数已留位);冷启动每次 CLI 重载 ~7s,高频可改常驻
+
 ### Phase 4 — Music Worker ✅
 - `~/tool/ace-step`：官方 repo + `ACE-Step/Ace-Step1.5` 权重 9.4GB，MPS 正常
 - 实测：45s BGM 暖 17s，峰值 RSS 14.8GB → `MEM_GB=15`；输出 48kHz WAV
