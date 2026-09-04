@@ -18,6 +18,9 @@ app = FastAPI(title="AI Media Gateway")
 from .compat_h3cweb import router as compat_h3cweb_router  # noqa: E402 — h3cweb :8600 face
 app.include_router(compat_h3cweb_router)  # registered before /info below so old format wins
 
+from .compat_openai import router as compat_openai_router  # noqa: E402 — 影策 openai-image / openai-audio faces
+app.include_router(compat_openai_router)
+
 
 class JobIn(BaseModel):
     type: str
