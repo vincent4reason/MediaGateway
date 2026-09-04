@@ -69,7 +69,7 @@
 - **验收标准（已确认）：自然语言一句话 → 完整 shot**（图+视频+配音+BGM+混音成片），
   链路经影策 Agent 驱动 Gateway 完成
 
-### Phase 7 — 音频协议插件包（影策侧，新增 2026-09-04）
+### Phase 7 — 音频协议插件包（影策侧）✅
 - **背景**：当前影策部署协议注册表 80 个插件中 0 个 audio 类，host 内置 openai-audio/async-audio
   被排除 → 「默认音频模型」无法配置。Gateway 侧 `/v1/audio/speech` + content 面已就绪
 - 产出：编写 `.yingce-plugin` 插件包（manifest.json 声明 audio 能力 provider，协议指向
@@ -77,7 +77,7 @@
 - 验收：影策渠道可建 audio 模型（cosyvoice-tts）→ 设置里默认音频模型可选 → canvas_audio 任务
   经 Gateway 出 wav 入素材库
 
-### Phase 8 — 本地 LLM 接入：qwen3.8-27B-4bit MLX（新增 2026-09-04）
+### Phase 8 — 本地 LLM 接入：qwen3.8-27B-4bit MLX ✅
 - **背景**：48GB 装不下 qwen3.8（27B 4bit ≈ 16GB）与 h3.c（~35GB）同驻，
   需要「接入 + 内存互斥」一起解决
 - Gateway 侧：
