@@ -86,4 +86,5 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         dialogue_volume=float(mix.get("dialogue_volume", 1.0)),
         music_volume=float(mix.get("music_volume", 0.15)),
         timeout=float(mix.get("timeout", 600)))
-    return {"output_path": final, "stages": meta}
+    last_frame = render.extract_last_frame(final, str(job_dir / "last_frame.png"))
+    return {"output_path": final, "last_frame_path": last_frame, "stages": meta}

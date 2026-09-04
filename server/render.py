@@ -164,9 +164,12 @@ def mux(
     subtitle_style: str = DEFAULT_SUBTITLE_STYLE,
     dialogue_volume: float = 1.0,
     music_volume: float = 0.15,
+    mute_source_audio: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
     dry_run: bool = False,
 ) -> List[str]:
+    """mute_source_audio: 丢弃视频自带音轨（h3 Ref2VA 工作流里音轨是模型渲染版，
+    成片改铺 Voice Worker 原声）。有附加音轨时混音底换 anullsrc，无附加音轨则成片静音。"""
     _check_file(video)
     if subtitles:
         _check_file(subtitles)
@@ -185,13 +188,15 @@ def mux(
 
     inputs = ["-i", video]
     fc = ""
-    if has_own_audio:
+    if has_own_audio and not mute_source_audio:
         n = 1          # 輸入序號：0=視頻, 1=墊底(如有), 2..=台詞
         mix_in = "[0:a]"
     else:
         inputs += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
-        n = 2          # 1=anullsrc 起底, 2..=音軌
-        mix_in = "[1:a]"
+        # anullsrc 是无限源：不 trim 的话 amix 永不结束（ffmpeg 挂死到超时）
+        fc += "[1:a]atrim=0:" + vdur + ",asetpts=PTS-STARTPTS[mutbase];"
+        n = 2          # 0=視頻, 1=anullsrc 起底, 2..=音軌
+        mix_in = "[mutbase]"
     dlg = 0        # 台詞標籤序號，獨立於是否有墊底
 
     for t in audio_tracks:
@@ -297,3 +302,16 @@ def freeze(
     if not dry_run:
         _run(cmd, timeout)
     return cmd
+
+
+def extract_last_frame(video: str, output: str, timeout: float = DEFAULT_TIMEOUT) -> str:
+    """抓取视频结尾附近一帧，作下一镜头 first_frame（剪辑接缝用，非像素级）。
+
+    -sseof -0.1 定位到结尾前 0.1s 取首帧：VFR 下可能差一两帧，接缝场景够用。
+    """
+    _check_file(video)
+    cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y", "-v", "error",
+           "-sseof", "-0.1", "-i", video, "-frames:v", "1", "-update", "1", output]
+    _run(cmd, timeout)
+    _check_file(output)
+    return output
