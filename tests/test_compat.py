@@ -19,6 +19,9 @@ os.environ["MG_ASSETS"] = os.path.join(_TMP, "assets")
 os.environ["H3CWEB_COMPAT_BASE_DIR"] = _TMP
 os.environ["H3CWEB_COMPAT_OUT_DIR"] = os.path.join(_TMP, "shots")
 os.environ["H3CWEB_COMPAT_REFS_DIR"] = os.path.join(_TMP, "refs")
+# dead LLM port: the scheduler's video mutex must never see (or kill) the real
+# local qwen server on :8000 from inside a test run
+os.environ["QWEN_PORT"] = "8899"
 for d in ("assets", "shots", "refs"):
     os.makedirs(os.path.join(_TMP, d), exist_ok=True)
 Path(_TMP, "shots", "legacy.mp4").write_bytes(b"LEGACY")

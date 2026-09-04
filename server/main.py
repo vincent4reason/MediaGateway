@@ -21,6 +21,9 @@ app.include_router(compat_h3cweb_router)  # registered before /info below so old
 from .compat_openai import router as compat_openai_router  # noqa: E402 — 影策 openai-image / openai-audio faces
 app.include_router(compat_openai_router)
 
+from .compat_chat import router as compat_chat_router  # noqa: E402 — 影策 openai-chat face → local qwen LLM
+app.include_router(compat_chat_router)
+
 
 class JobIn(BaseModel):
     type: str

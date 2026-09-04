@@ -9,6 +9,7 @@ both are short tasks (image ~70s, TTS ~10s) and the caller is local.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 from typing import Optional
@@ -78,13 +79,27 @@ class SpeechIn(BaseModel):
     speed: float = 1.0
 
 
+def _known_voice(model: Optional[str]) -> Optional[str]:
+    """影策渠道模型把 voiceId 放在 model 字段；命中 voices.json 才采纳。"""
+    if not model:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "vendor", "cosyvoice", "voices.json"), encoding="utf-8") as f:
+            voices = json.load(f)
+        return model if model in voices else None
+    except (OSError, ValueError):
+        return None
+
+
 @router.post("/v1/audio/speech")
 def audio_speech(req: SpeechIn, request: Request):
     if not req.input.strip():
         raise HTTPException(400, "input is required")
+    voice = req.voice or _known_voice(req.model)
     params = {"text": req.input, "speed": req.speed}
-    if req.voice:
-        params["voice"] = req.voice  # else voice worker uses its default voice
+    if voice:
+        params["voice"] = voice  # else voice worker uses its default voice
     job = core.create_job("voice", params)
     job = _wait_job(job["id"], timeout=300)
     base = str(request.base_url).rstrip("/")

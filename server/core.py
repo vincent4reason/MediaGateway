@@ -25,6 +25,7 @@ import json
 import os
 import pkgutil
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -186,6 +187,9 @@ def _resident_gb(reg: dict) -> float:
     proc = getattr(voice_mod, "_proc", None) if voice_mod else None
     if voice_mod is not None and proc is not None and proc.poll() is None:
         gb += voice_mod.MEM_GB
+    llm_mod = sys.modules.get(f"{__package__}.llm")  # absent => no LLM face loaded
+    if llm_mod is not None and llm_mod.resident():
+        gb += llm_mod.MEM_GB
     return gb
 
 
@@ -203,6 +207,14 @@ def _admit_next() -> tuple[str, dict] | None:
             _update(row["id"], status="failed", error=f"unknown type: {row['type']}",
                     finished_at=time.time())
             continue
+        # GPU mutual exclusion: video/shot can't share 48GB with the resident
+        # LLM. Ask it to unload, skip this round; the next poll re-checks until
+        # the LLM process is gone. Absent llm module => behaviour unchanged.
+        if row["type"] in ("video", "shot"):
+            llm_mod = sys.modules.get(f"{__package__}.llm")
+            if llm_mod is not None and llm_mod.resident():
+                getattr(llm_mod, "request_unload", lambda: None)()
+                break
         if running_gb + worker.MEM_GB <= BUDGET_GB:
             return worker, _job_row(row)
         # budget-blocked: stop at first job that doesn't fit (FIFO head blocking

@@ -106,6 +106,28 @@ def test_audio_speech_returns_url_and_content():
             core.create_job, core.get_job = saved
 
 
+def test_audio_speech_model_falls_back_to_voice():
+    """No voice + model in voices.json -> model used as voiceId; unknown model -> default voice."""
+    with tempfile.TemporaryDirectory() as d:
+        fake = FakeJob(str(Path(d) / "o.wav"))
+        saved = (core.create_job, core.get_job)
+        core.create_job, core.get_job = fake.create, fake.get
+        try:
+            client = TestClient(app)
+            r = client.post("/v1/audio/speech", json={"input": "你好", "model": "C002"})
+            assert r.status_code == 200, r.text
+            assert fake.calls[0][1]["voice"] == "C002"
+            r = client.post("/v1/audio/speech", json={"input": "你好", "model": "gpt-4o-mini-tts"})
+            assert r.status_code == 200, r.text
+            assert "voice" not in fake.calls[1][1]
+            # explicit voice still wins over model
+            r = client.post("/v1/audio/speech", json={"input": "你好", "model": "C001", "voice": "C002"})
+            assert r.status_code == 200, r.text
+            assert fake.calls[2][1]["voice"] == "C002"
+        finally:
+            core.create_job, core.get_job = saved
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
