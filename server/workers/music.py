@@ -61,8 +61,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     if not prompt:
         raise ValueError("params.prompt is required")
     duration = float(params.get("duration_s", 45))
-    if not 10 <= duration <= 600:  # ACE-Step 1.5 supported range
-        raise ValueError(f"duration_s must be 10-600, got {duration}")
+    # ACE-Step 1.5 只支持 10-600s：短视频(如 3s 分镜)夹到下限，mux 的 atrim 会裁回视频长度
+    duration = max(10.0, min(600.0, duration))
     seed = params.get("seed")
     if seed is None:
         seed = random.randint(0, 2**31 - 1)

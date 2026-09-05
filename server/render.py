@@ -228,7 +228,9 @@ def mux(
     else:
         vmap = "0:v"
     if has_audio:
-        fc += f"{mix_in}amix=inputs={n}:normalize=0:dropout_transition=0[aout];"
+        # amix 路数 = mix_in 里实际拼接的标签数（mute 分支下不等于输入索引 n）
+        amix_n = mix_in.count("[")
+        fc += f"{mix_in}amix=inputs={amix_n}:normalize=0:dropout_transition=0[aout];"
         amap = "[aout]"
     else:
         amap = "0:a"  # 無額外音軌：保留視頻自帶音軌
@@ -315,3 +317,59 @@ def extract_last_frame(video: str, output: str, timeout: float = DEFAULT_TIMEOUT
     _run(cmd, timeout)
     _check_file(output)
     return output
+
+
+# --- bgm: 多段音樂 crossfade 鏈成連續音軌，墊到視頻音軌下 ---
+# segments: [{"path": str, "duration_s": float}, ...]（有序；duration_s 僅為調用方
+# 提示值，鏈長以文件真實時長為準）。音樂短於視頻 aloop 循環補齊，長則 atrim。
+
+def bgm(
+    video: str,
+    segments: List[dict],
+    output: str,
+    gain_db: float = -6.0,
+    timeout: float = DEFAULT_TIMEOUT,
+    dry_run: bool = False,
+) -> List[str]:
+    _check_file(video)
+    if not segments:
+        raise RenderError("需要至少 1 段音樂")
+    for s in segments:
+        _check_file(s["path"] if isinstance(s, dict) else s)
+
+    vdur = _probe(video, select_audio=False)
+    try:
+        float(vdur)
+    except ValueError:
+        raise RenderError(f"無法解析視頻時長: {video} → {vdur!r}")
+    has_own_audio = bool(_probe(video, select_audio=True))
+
+    inputs = ["-i", video]
+    for s in segments:
+        inputs += ["-i", s["path"]]
+    # aformat 統一取樣率/聲道——acrossfade/amix 遇到混合取樣率的輸入會直接報錯
+    fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
+    fc = ""
+    prev = ""
+    for i in range(len(segments)):
+        fc += f"[{i + 1}:a]{fmt}[g{i}];"
+        if prev:
+            fc += f"{prev}[g{i}]acrossfade=d=1:c1=tri:c2=tri[x{i}];"
+            prev = f"[x{i}]"
+        else:
+            prev = f"[g{i}]"
+    # aloop+atrim：不足視頻長自動從頭循環補齊，超長則裁掉——兩種情況同一條濾鏡
+    fc += f"{prev}aloop=loop=-1:size=1000000000,atrim=0:{vdur},asetpts=PTS-STARTPTS,"
+    fc += f"volume={gain_db}dB[bgv]"
+    if has_own_audio:
+        fc += f";[0:a]{fmt}[v0a];[v0a][bgv]amix=inputs=2:normalize=0[aout]"
+        amap = "[aout]"  # normalize=0：原音軌全量，bgm 只吃 gain_db
+    else:
+        amap = "[bgv]"  # 無源音軌：音樂直接作輸出音軌
+
+    cmd = [_bin("ffmpeg", "FFMPEG_BIN"), "-y"] + inputs
+    cmd += ["-filter_complex", fc, "-map", "0:v", "-map", amap,
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", output]
+    if not dry_run:
+        _run(cmd, timeout)
+    return cmd

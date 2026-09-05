@@ -242,7 +242,7 @@ def test_mux_silent_video_uses_anullsrc():
         assert "-f" in cmd and "lavfi" in cmd and "anullsrc" in " ".join(cmd)
         fc = cmd[cmd.index("-filter_complex") + 1]
         assert "[1:a]" in fc and "[0:a]" not in fc, fc
-        assert "amix=inputs=3" in fc, fc  # anullsrc + d1 + ... 视频不计
+        assert "amix=inputs=2" in fc, fc  # anullsrc + d1（视频音轨被静音，不计入 amix）
 
 
 def test_mux_rejects_bad_subtitle_path():
