@@ -47,6 +47,33 @@ def run_with(params, engine):
         video._engine = saved
 
 
+def test_profile_expansion():
+    """quality/draft profile 展开为 engine 参数；显式参数优先。"""
+    eng = FakeEngine()
+    saved = video._engine
+    video._engine = eng
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            for i, (params, check) in enumerate([
+                ({"prompt": "x", "profile": "quality"},
+                 lambda ov: (ov["steps"] == 20 and ov["core_reuse"] == 4
+                             and ov["token_reduction"] == 1 and ov["dit_layers"] == 45)),
+                ({"prompt": "x", "profile": "draft", "seconds": 5},
+                 lambda ov: ov["render_width"] == 576 and ov["render_height"] == 320
+                 and ov["token_reduction"] == 1),
+                ({"prompt": "x", "profile": "quality", "steps": 9},
+                 lambda ov: ov["steps"] == 9),  # 显式参数覆盖 profile
+            ]):
+                video._engine = eng  # closed after each run — re-inject
+                with tempfile.TemporaryDirectory() as sub:
+                    video.run(params, Path(sub), progress=lambda r, p="": None,
+                              cancel=lambda: False)
+                ov = eng.calls[i]["overrides"]
+                assert check(ov), (i, ov)
+    finally:
+        video._engine = saved
+
+
 def test_engine_released_after_job():
     eng = FakeEngine()
     saved = video._engine

@@ -70,31 +70,65 @@ def _build_refs(refs) -> list:
     return out
 
 
+# P0 benchmark 定档（docs/h3_speed_plan.md，M5 Pro 实测 2026-09-05）：
+# quality=D 4.6× vs reference；draft=G 11.7×；int8 零收益已剔除
+_PROFILES = {
+    "standard": {},
+    "quality": {"steps": 20, "dit_layers": 45, "core_reuse": 4,
+                "token_reduction": True},
+    "draft": {"steps": 6, "dit_layers": 45, "denoise_reuse": 1,
+              "token_reduction": True, "_internal": 0.667},
+    "reference": {"steps": 20, "dit_layers": 50, "denoise_reuse": 1},
+}
+
+
+def _internal_canvas(width: int, height: int, factor: float):
+    """同长宽比缩小到 32 倍数（h3 internal canvas 要求同比例，否则拒绝）。"""
+    import math
+    uw, uh = width // 32, height // 32
+    if uw < 2 or uh < 2:
+        return None
+    g = math.gcd(uw, uh)
+    base_w, base_h = uw // g, uh // g  # 例: 864x480 → 9x5
+    k = max(1, round(width * factor / (base_w * 32)))
+    return base_w * k * 32, base_h * k * 32
+
+
 def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     prompt = params.get("prompt")
     if not prompt:
         raise VideoError("prompt is required")
 
+    profile = dict(_PROFILES.get(params.get("profile"), {}))
+    internal_factor = profile.pop("_internal", None)
+    width = _round32(params.get("width", 864))
+    height = _round32(params.get("height", 480))
+
     overrides = dict(
-        width=_round32(params.get("width", 864)),
-        height=_round32(params.get("height", 480)),
-        steps=int(params.get("steps", 6)),
-        denoise_reuse=int(params.get("denoise_reuse", 1)),
-        dit_layers=int(params.get("dit_layers", 45)),
+        width=width,
+        height=height,
+        steps=int(params.get("steps", profile.get("steps", 6))),
+        denoise_reuse=int(params.get("denoise_reuse", profile.get("denoise_reuse", 1))),
+        dit_layers=int(params.get("dit_layers", profile.get("dit_layers", 45))),
     )
     # core_reuse/token_reduction/ssd_streaming mirror h3cweb: only send non-defaults.
-    if int(params.get("core_reuse", 1)) > 1:
-        overrides["core_reuse"] = int(params["core_reuse"])
-    if params.get("token_reduction"):
+    core = int(params.get("core_reuse", profile.get("core_reuse", 1)))
+    if core > 1:
+        overrides["core_reuse"] = core
+    if params.get("token_reduction") or profile.get("token_reduction"):
         overrides["token_reduction"] = 1
     if params.get("ssd_streaming"):
         overrides["ssd_streaming"] = 1
-    if params.get("use_int8_row_fc2"):  # M5 INT8 FC2，约 +2.6%，低风险叠加项
+    if params.get("use_int8_row_fc2"):  # P0 实测 M5 Pro 零收益，默认不开，显式传参仍支持
         overrides["use_int8_row_fc2"] = 1
-    # internal canvas：DiT/VAE 小画布 + vImage 放大（384→512 为验证过的快速档）
+    # internal canvas：DiT/VAE 小画布 + vImage 放大（显式传参优先，其次 profile 因子）
     if params.get("render_width") and params.get("render_height"):
         overrides["render_width"] = _round32(params["render_width"])
         overrides["render_height"] = _round32(params["render_height"])
+    elif internal_factor:
+        rw, rh = _internal_canvas(width, height, internal_factor)
+        if rw:
+            overrides["render_width"], overrides["render_height"] = rw, rh
     # 1 second = 24 frames; seconds wins over frames (same as h3cweb).
     if params.get("seconds"):
         overrides["frames"] = max(1, round(float(params["seconds"]) * 24))
