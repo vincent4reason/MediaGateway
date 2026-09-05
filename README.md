@@ -16,19 +16,19 @@ Director UI (影策 canvas)          POST /v1/jobs { type, params }
 │  scheduler · OpenAI-compatible faces        │
 └──────────────┬──────────────────────────────┘
                │  worker contract (load → run → release)
-   ┌───────────┼───────────┬────────────┬──────────────┐
-   ▼           ▼           ▼            ▼              ▼
- image      video       voice      tts_qwen        music
- iris.c     h3.c      CosyVoice   Qwen3-TTS       ACE-Step
- (FLUX)   (MiniMax-H3, 0.5B        (mlx-audio)     1.5 (MLX)
-           Metal, Ref2VA)                            + FFmpeg render
+   ┌───────────┬───────────┬──────────┬──────────┬────────┬────────┐
+   ▼           ▼           ▼          ▼          ▼        ▼        ▼
+ image      video       voice     tts_qwen    music    mix     concat
+ iris.c     h3.c      CosyVoice  Qwen3-TTS  ACE-Step  SFX     FFmpeg
+ (FLUX)   (MiniMax-H3, 0.5B                (MLX)    library  stitch
+           Metal, Ref2VA)                                    + mux
 ```
 
 ## Engines
 
 | Worker | Engine | Output | Notes |
 |---|---|---|---|
-| `image` | iris.c — FLUX.2 Klein 4B (Metal) | PNG | txt2img / img2img, up to 16 reference images |
+| `image` | [iris.c](https://github.com/antirez/iris.c) — FLUX.2 Klein 4B (Metal) | PNG | txt2img / img2img, up to 16 reference images |
 | `video` | [h3.c](https://github.com/antirez/h3.c) MiniMax-H3 (Metal) | MP4 | T2V/I2V/FL2VA/Ref2VA (audio-conditioned lip sync), profiles |
 | `voice` | CosyVoice 0.5B (zero-shot voice clones) | WAV | voice registry `vendor/cosyvoice/voices.json` |
 | `tts_qwen` | Qwen3-TTS 1.7B via [mlx-audio](https://github.com/Blaizzy/mlx-audio) | WAV | second voice engine |
@@ -114,3 +114,5 @@ docs/                plan.md · tools.md (engine inventory) · h3_speed_plan.md
   skill chain. Run it on :8090 (Go) + :3000 (React) alongside this gateway.
 - [antirez/h3.c](https://github.com/antirez/h3.c) — the video engine and the
   ctypes bridge source.
+- [antirez/iris.c](https://github.com/antirez/iris.c) — the image engine
+  (FLUX.2 Klein / Z-Image-Turbo on Metal).

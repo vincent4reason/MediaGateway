@@ -16,19 +16,19 @@
 │  OpenAI 兼容协议面                           │
 └──────────────┬──────────────────────────────┘
                │  worker 契约(加载 → 运行 → 释放)
-   ┌───────────┼───────────┬────────────┬──────────────┐
-   ▼           ▼           ▼            ▼              ▼
- image      video       voice      tts_qwen        music
- iris.c     h3.c      CosyVoice   Qwen3-TTS       ACE-Step
- (FLUX)   (MiniMax-H3, 0.5B        (mlx-audio)     1.5 (MLX)
-           Metal, Ref2VA)                            + FFmpeg 渲染
+   ┌───────────┬───────────┬──────────┬──────────┬────────┬────────┐
+   ▼           ▼           ▼          ▼          ▼        ▼        ▼
+ image      video       voice     tts_qwen    music    mix     concat
+ iris.c     h3.c      CosyVoice  Qwen3-TTS  ACE-Step  SFX     FFmpeg
+ (FLUX)   (MiniMax-H3, 0.5B                (MLX)    音效库   拼接+混音
+           Metal, Ref2VA)
 ```
 
 ## 引擎
 
 | Worker | 引擎 | 产物 | 说明 |
 |---|---|---|---|
-| `image` | iris.c — FLUX.2 Klein 4B(Metal) | PNG | 文生图/图生图,最多 16 张参考图 |
+| `image` | [iris.c](https://github.com/antirez/iris.c) — FLUX.2 Klein 4B(Metal) | PNG | 文生图/图生图,最多 16 张参考图 |
 | `video` | [h3.c](https://github.com/antirez/h3.c) MiniMax-H3(Metal) | MP4 | T2V/I2V/FL2VA/Ref2VA(音频条件口型对齐),多档 profile |
 | `voice` | CosyVoice 0.5B(zero-shot 声音克隆) | WAV | 音色注册表 `vendor/cosyvoice/voices.json` |
 | `tts_qwen` | Qwen3-TTS 1.7B([mlx-audio](https://github.com/Blaizzy/mlx-audio)) | WAV | 第二声音引擎 |
@@ -109,3 +109,4 @@ docs/                plan.md · tools.md(引擎实测)· h3_speed_plan.md(速度
   草稿/成片双档、TTS 口型对齐、BGM 混音;同时管理项目/角色/场景与小说转分镜技能链。
   与本网关配套运行::8090(Go 后端)+ :3000(React 前端)。
 - [antirez/h3.c](https://github.com/antirez/h3.c) — 视频引擎及 ctypes bridge 来源
+- [antirez/iris.c](https://github.com/antirez/iris.c) — 生图引擎(FLUX.2 Klein / Z-Image-Turbo,Metal)
