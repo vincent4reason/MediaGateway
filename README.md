@@ -34,7 +34,8 @@ Director UI (影策 canvas)          POST /v1/jobs { type, params }
 | `tts_qwen` | Qwen3-TTS 1.7B via [mlx-audio](https://github.com/Blaizzy/mlx-audio) | WAV | second voice engine |
 | `music` | ACE-Step 1.5 | WAV | instrumental / lyrics |
 | `shot` | composite: image → voice → video → music → mux | MP4 | draft / quality profiles, h3 audio muted, TTS original laid back |
-| `concat` / `noop` | FFmpeg | MP4 | multi-shot stitch with music bed |
+| `mix` | FFmpeg | MP4 | SFX/voice tracks onto video — `sfx_tag` picks from a curated 40+-tag library (wind, rain, explosion, thunder, sword clash, footsteps, magic…) |
+| `concat` / `noop` | FFmpeg | MP4 | multi-shot stitch with per-segment music bed |
 
 ## Highlights
 
@@ -59,6 +60,10 @@ Director UI (影策 canvas)          POST /v1/jobs { type, params }
 | `draft` | + internal canvas 576×320 | **110 s** | **11.7×** |
 
   INT8 FC2 measured **zero gain** on M5 Pro and is excluded from profiles.
+- **Sound effects** — curated SFX library (`assets/sfx/<tag>/`, 40+ tags with
+  manifest and sources: ambience wind/rain/crowd, explosion, thunder, melee,
+  footsteps, UI/magic…) mixed via the `mix` worker or `/v1/mix`; ambient beds
+  can also be generated through the music engine.
 
 ## Quick start
 
@@ -93,7 +98,7 @@ server/
   compat_chat.py     OpenAI chat face → local MLX LLM
   render.py          FFmpeg wrappers: mux (voice+BGM, mute source), concat, freeze
   llm.py             local qwen MLX server lifecycle (spawn / idle-exit / unload)
-  workers/           noop | image | video | voice | tts_qwen | music | shot | concat | mix
+  workers/           noop | image | video | voice | tts_qwen | music | shot | mix | concat
 vendor/h3_bridge.py  ctypes FFI for libh3.dylib
 scripts/             deploy_config.py (launchd plist) · cutover.py · h3_bench.py
 docs/                plan.md · tools.md (engine inventory) · h3_speed_plan.md

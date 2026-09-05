@@ -34,7 +34,8 @@
 | `tts_qwen` | Qwen3-TTS 1.7B([mlx-audio](https://github.com/Blaizzy/mlx-audio)) | WAV | 第二声音引擎 |
 | `music` | ACE-Step 1.5 | WAV | 纯音乐/歌词歌曲 |
 | `shot` | 组合:image → voice → video → music → 混音 | MP4 | 草稿/成片两档,h3 音轨静音、铺 TTS 原声 |
-| `concat` / `noop` | FFmpeg | MP4 | 多镜头拼接 + BGM 垫底 |
+| `mix` | FFmpeg | MP4 | 音效/台词轨混上视频——`sfx_tag` 从 40+ 标签的精选音效库随机选取(风/雨/爆炸/雷/刀剑/脚步/魔法…) |
+| `concat` / `noop` | FFmpeg | MP4 | 多镜头拼接 + 分段配乐垫底 |
 
 ## 特性
 
@@ -58,6 +59,9 @@
 | `draft` | + internal canvas 576×320 | **110s** | **11.7×** |
 
   INT8 FC2 在 M5 Pro 实测零收益,已从 profile 剔除。
+- **音效库** — 精选 SFX 库(`assets/sfx/<tag>/`,40+ 标签,含 manifest 与来源:
+  环境风/雨/人群、爆炸、雷、刀剑、脚步、UI/魔法…),经 `mix` worker 或
+  `/v1/mix` 混入视频;氛围类声音也可由音乐引擎生成。
 
 ## 快速开始
 
@@ -91,7 +95,7 @@ server/
   compat_chat.py     OpenAI chat 协议面 → 本地 MLX LLM
   render.py          FFmpeg 封装:混音(台词+BGM,静音源音轨)、拼接、定格
   llm.py             本地 qwen MLX server 生命周期(按需拉起/空闲退出/卸载)
-  workers/           noop | image | video | voice | tts_qwen | music | shot | concat | mix
+  workers/           noop | image | video | voice | tts_qwen | music | shot | mix | concat
 vendor/h3_bridge.py  libh3.dylib 的 ctypes FFI
 scripts/             deploy_config.py(launchd plist)· cutover.py · h3_bench.py
 docs/                plan.md · tools.md(引擎实测)· h3_speed_plan.md(速度优化)
