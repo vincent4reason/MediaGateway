@@ -89,6 +89,12 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         overrides["token_reduction"] = 1
     if params.get("ssd_streaming"):
         overrides["ssd_streaming"] = 1
+    if params.get("use_int8_row_fc2"):  # M5 INT8 FC2，约 +2.6%，低风险叠加项
+        overrides["use_int8_row_fc2"] = 1
+    # internal canvas：DiT/VAE 小画布 + vImage 放大（384→512 为验证过的快速档）
+    if params.get("render_width") and params.get("render_height"):
+        overrides["render_width"] = _round32(params["render_width"])
+        overrides["render_height"] = _round32(params["render_height"])
     # 1 second = 24 frames; seconds wins over frames (same as h3cweb).
     if params.get("seconds"):
         overrides["frames"] = max(1, round(float(params["seconds"]) * 24))
