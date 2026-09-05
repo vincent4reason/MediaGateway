@@ -53,6 +53,7 @@ class ImageGenIn(BaseModel):
     size: Optional[str] = None
     n: int = 1
     seed: Optional[int] = None
+    variant: Optional[str] = None  # 4b | 9b | 9b-base
 
 
 def _parse_size(size: Optional[str]) -> tuple[int, int]:
@@ -88,8 +89,11 @@ async def _gen_images(prompt: str, n: int, seed: Optional[int], extra: dict) -> 
 async def images_generations(req: ImageGenIn):
     n = max(1, min(int(req.n or 1), 4))
     width, height = _parse_size(req.size)
+    extra = {"width": width, "height": height}
+    if req.variant:
+        extra["variant"] = req.variant
     return {"created": int(time.time()),
-            "data": await _gen_images(req.prompt, n, req.seed, {"width": width, "height": height})}
+            "data": await _gen_images(req.prompt, n, req.seed, extra)}
 
 
 _MAGIC_EXTS = ((b"\x89PNG", "png"), (b"\xff\xd8", "jpg"), (b"P5", "ppm"), (b"P6", "ppm"))
@@ -124,6 +128,7 @@ async def images_edits(
     size: Optional[str] = Form(None),
     n: int = Form(1),
     seed: Optional[int] = Form(None),
+    variant: Optional[str] = Form(None),  # 4b | 9b | 9b-base
     image: list[UploadFile] = File([]),
     mask: Optional[UploadFile] = File(None),
 ):
@@ -145,7 +150,10 @@ async def images_edits(
     tmpdir = tempfile.mkdtemp(prefix="mg_edits_")
     try:
         refs = [_save_ref(i, await up.read(), tmpdir) for i, up in enumerate(image)]
-        data = await _gen_images(prompt, n, seed, {"width": width, "height": height, "input": refs})
+        extra = {"width": width, "height": height, "input": refs}
+        if variant:
+            extra["variant"] = variant
+        data = await _gen_images(prompt, n, seed, extra)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return {"created": int(time.time()), "data": data}

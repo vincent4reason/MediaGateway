@@ -20,6 +20,13 @@ DEFAULT_BIN = "/Users/vincent/tool/iris.c/iris"
 DEFAULT_MODEL = "/Users/vincent/tool/iris.c/flux-klein-4b"
 DEFAULT_TIMEOUT = 600.0
 
+# params["variant"] 按任务选模型档（9B 非商用 NCL 许可，内部工具用）
+_VARIANT_DIRS = {
+    "4b": DEFAULT_MODEL,
+    "9b": "/Users/vincent/tool/iris.c/flux-klein-9b",
+    "9b-base": "/Users/vincent/tool/iris.c/flux-klein-9b-base",
+}
+
 # ponytail: one global lock serializes iris subprocesses — parallel iris+iris is
 # unmeasured (docs only prove iris+cosyvoice coexists), so this is the safe fallback
 # even though the budget admits 2 (2×10.8GB < 40GB). Narrow to the model-load window
@@ -34,6 +41,18 @@ def _png_size(path: Path) -> tuple[int, int]:
     if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
         raise ValueError(f"output is not a valid PNG: {path}")
     return struct.unpack(">II", head[16:24])
+
+
+def _resolve_model(variant) -> str:
+    """params["variant"]: 4b（默认）/ 9b / 9b-base；IRIS_MODEL_DIR 仍可整体覆盖 4b 路径。"""
+    if not variant or variant == "4b":
+        return os.environ.get("IRIS_MODEL_DIR", DEFAULT_MODEL)
+    d = _VARIANT_DIRS.get(variant)
+    if not d:
+        raise ValueError(f"unknown model variant: {variant} (known: {sorted(_VARIANT_DIRS)})")
+    if not os.path.isdir(d):
+        raise ValueError(f"model variant not downloaded: {variant} ({d})")
+    return d
 
 
 def run(params: dict, job_dir: Path, progress, cancel) -> dict:
@@ -58,7 +77,7 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     timeout = float(params.get("timeout", DEFAULT_TIMEOUT))
 
     out = job_dir / "image.png"
-    model = os.environ.get("IRIS_MODEL_DIR", DEFAULT_MODEL)
+    model = _resolve_model(params.get("variant"))
     cmd = [
         os.environ.get("IRIS_BIN", DEFAULT_BIN),
         "-d", model,
