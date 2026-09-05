@@ -7,21 +7,22 @@
 对外暴露统一的异步任务 API。
 
 ```text
-导演 UI(影策画布)              POST /v1/jobs { type, params }
-        │
-        ▼
-┌─────────────────────────────────────────────┐
-│ AI Media Gateway(FastAPI,:8600)            │
-│  任务队列 · SQLite · 内存预算调度            │
-│  OpenAI 兼容协议面                           │
-└──────────────┬──────────────────────────────┘
-               │  worker 契约(加载 → 运行 → 释放)
-   ┌───────────┬───────────┬──────────┬──────────┬────────┬────────┐
-   ▼           ▼           ▼          ▼          ▼        ▼        ▼
- image      video       voice     tts_qwen    music    mix     concat
- iris.c     h3.c      CosyVoice  Qwen3-TTS  ACE-Step  SFX     FFmpeg
- (FLUX)   (MiniMax-H3, 0.5B                (MLX)    音效库   拼接+混音
-           Metal, Ref2VA)
+影策画布(MediaGateway_YingCe,Go :8090 + React :3000)
+   │  分镜渲染端点 · OpenAI 兼容协议面(/v1/videos、/v1/images/*、
+   │  /v1/audio/speech、/v1/chat/completions)· POST /v1/jobs
+   ▼
+┌──────────────────────────────────────────────────────────────┐
+│ AI Media Gateway(FastAPI,:8600)                             │
+│  任务队列 · SQLite · 内存预算调度                             │
+│  OpenAI 兼容协议面 · 本地 LLM 面(qwen3.8,MLX)                │
+└───────────────┬──────────────────────────────────────────────┘
+                │  worker 契约(加载 → 运行 → 释放)
+   ┌────────┬──────────┬───────────┬───────────┬───────┬────────┬─────────┐
+   ▼        ▼          ▼           ▼           ▼       ▼        ▼         ▼
+ image    video      voice     tts_qwen     music    mix    concat     shot
+ iris.c   h3.c     CosyVoice  Qwen3-TTS  ACE-Step   SFX    FFmpeg   组合编排
+ (FLUX) (MiniMax-H3, 0.5B                (MLX)   音效库   拼接   (draft/quality)
+         Metal, Ref2VA)
 ```
 
 ## 引擎
