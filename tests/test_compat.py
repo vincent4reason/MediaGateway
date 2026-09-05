@@ -167,6 +167,11 @@ def test_sora_status_mapping_and_content(client):
     s = client.get(f"/v1/videos/{jid}").json()
     assert s["status"] == "failed" and s["error"] == "bye"
     assert client.get("/v1/videos/video_nope").status_code == 404
+    # 影策 newapi 上游取消走 DELETE；重复取消/已结束也 200 + 当前状态
+    r = client.post(f"/v1/videos/{jid}/cancel")
+    assert r.status_code == 200 and r.json()["id"] == jid, r.text
+    r = client.delete(f"/v1/videos/{jid}")
+    assert r.status_code == 200 and "status" in r.json(), r.text
     assert client.get("/v1/videos/video_nope/content").status_code == 404
     assert j  # silence unused
 

@@ -156,20 +156,22 @@ def get_file(name: str):
 _SORA_STATUS = {"queued": "queued", "running": "in_progress",
                 "completed": "completed", "failed": "failed", "cancelled": "failed"}
 
-_DATA_URL = re.compile(r"^data:image/([a-z0-9.+-]+);base64,(.*)$", re.S)
-_DATA_EXT = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "webp": ".webp", "gif": ".gif"}
+_DATA_URL = re.compile(r"^data:(image|audio)/([a-z0-9.+-]+);base64,(.*)$", re.S)
+_DATA_EXT = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "webp": ".webp", "gif": ".gif",
+             "mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav",
+             "ogg": ".ogg", "flac": ".flac", "aac": ".aac", "m4a": ".m4a", "mp4": ".m4a"}
 
 
-def _save_data_url(text: str) -> Optional[str]:
-    """Decode a data:image URL to a file h3 can read. Non-data values are skipped."""
+def _save_data_url(text: str, kind: str = "image") -> Optional[str]:
+    """Decode a data:image|audio URL to a file h3 can read. Non-matching values are skipped."""
     m = _DATA_URL.match(text.strip())
-    if not m:
+    if not m or m.group(1) != kind:
         return None
-    ext = _DATA_EXT.get(m.group(1).lower(), ".png")
+    ext = _DATA_EXT.get(m.group(2).lower(), ".png" if kind == "image" else ".mp3")
     os.makedirs(REFS_DIR, exist_ok=True)
     path = os.path.join(REFS_DIR, f"ref_{uuid.uuid4().hex[:8]}{ext}")
     with open(path, "wb") as f:
-        f.write(base64.b64decode(m.group(2)))
+        f.write(base64.b64decode(m.group(3)))
     return path
 
 
@@ -213,11 +215,27 @@ async def openai_create_video(request: Request):
     prompt = re.sub(r"\s*\[IMAGE_\d+\]", "", str(raw.get("prompt") or "")).strip()
     if not prompt:
         raise HTTPException(400, "prompt is required")
-    # unsupported reference media: fail loudly, never silently drop
-    for key in ("videos", "reference_videos", "video_url",
-                "audios", "reference_audios", "audio_url"):
+    # video refs unsupported: fail loudly, never silently drop
+    for key in ("videos", "reference_videos", "video_url"):
         if raw.get(key):
-            raise HTTPException(400, f"{key} references not supported (images only)")
+            raise HTTPException(400, f"{key} references not supported (images/audio only)")
+    # audio refs: data URL or existing absolute local path
+    audio_paths: list[str] = []
+    for key in ("audios", "reference_audios", "audio_url"):
+        items = raw.get(key)
+        if not items:
+            continue
+        if isinstance(items, str):
+            items = [items]
+        for item in items:
+            item = str(item)
+            path = _save_data_url(item, "audio")
+            if not path and os.path.isabs(item) and os.path.isfile(item):
+                path = item
+            if not path:
+                raise HTTPException(400,
+                                    f"{key}: need a data URL or existing absolute path")
+            audio_paths.append(path)
     size = str(raw.get("size") or "")
     seconds_raw = raw.get("seconds")
     try:
@@ -243,7 +261,8 @@ async def openai_create_video(request: Request):
         raise HTTPException(400, "resolution exceeds h3 768*1344 pixel limit")
     resp = create_job(JobRequest(
         prompt=prompt, width=width, height=height, seconds=seconds,
-        refs=[Ref(kind="image", path=p) for p in ref_paths],
+        refs=[Ref(kind="image", path=p) for p in ref_paths]
+             + [Ref(kind="audio", path=p) for p in audio_paths],  # 先圖後音頻
         # keep reference conditioning at native res (up to 2048px), not
         # stretched down to the render canvas
         reference_image_size=1 if ref_paths else 0))
@@ -268,6 +287,23 @@ def openai_video_status(job_id: str, request: Request):
     return out
 
 
+@router.post("/v1/videos/{job_id}/cancel")
+def openai_video_cancel(job_id: str):
+    """影策 newapi 适配器的上游取消（BuildCancel）。任务已结束也返回 200 + 当前状态。"""
+    job = core.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "video not found")
+    core.cancel_job(job_id)
+    job = core.get_job(job_id)
+    return {"id": job_id, "status": _SORA_STATUS.get(job["status"], "in_progress")}
+
+
+@router.delete("/v1/videos/{job_id}")
+def openai_video_delete(job_id: str):
+    """newapi 上游取消用 DELETE（复用影策 deleteProviderTask helper）。"""
+    return openai_video_cancel(job_id)
+
+
 @router.get("/v1/videos/{job_id}/content")
 def openai_video_content(job_id: str):
     job = core.get_job(job_id)
@@ -277,3 +313,55 @@ def openai_video_content(job_id: str):
     if job["status"] != "completed" or not op or not os.path.isfile(op):
         raise HTTPException(409, "video not ready")
     return FileResponse(op, media_type="video/mp4")
+
+
+class MixIn(BaseModel):
+    video_path: Optional[str] = None
+    video_job_id: Optional[str] = None
+    tracks: list[dict] = []
+
+
+@router.post("/v1/mix")
+def create_mix(req: MixIn):
+    """把 sfx/voice 軌混上視頻（mix worker）。tracks 見 workers/mix.py。"""
+    video = req.video_path
+    if not video and req.video_job_id:
+        job = core.get_job(req.video_job_id)
+        if not job or job["status"] != "completed" or not job.get("output_path"):
+            raise HTTPException(404, "video job not found or not completed")
+        video = job["output_path"]
+    if not video:
+        raise HTTPException(400, "video_path or video_job_id required")
+    resp = core.create_job("mix", {"video_path": video, "tracks": req.tracks})
+    return {"id": resp["id"], "job_id": resp["id"], "status": resp["status"]}
+
+
+@router.get("/v1/mix/jobs/{job_id}/content")
+def mix_content(job_id: str):
+    job = core.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "mix not found")
+    op = job["output_path"]
+    if job["status"] != "completed" or not op or not os.path.isfile(op):
+        raise HTTPException(409, "mix not ready")
+    return FileResponse(op, media_type="video/mp4")
+
+
+class ConcatIn(BaseModel):
+    shots: list[str]
+    music_segments: Optional[list[dict]] = None
+    bgm_gain_db: float = -6.0
+
+
+@router.post("/v1/concat")
+def create_concat(req: ConcatIn):
+    """按序拼接行視頻（可選段級配樂 acrossfade 墊底），見 workers/concat.py。"""
+    if len(req.shots) < 2:
+        raise HTTPException(400, "shots must be a list of ≥2 video paths")
+    missing = [p for p in req.shots if not os.path.isfile(p)]
+    if missing:
+        raise HTTPException(400, f"shot files not found: {missing[:3]}")
+    resp = core.create_job("concat", {"shots": req.shots,
+                                      "music_segments": req.music_segments,
+                                      "bgm_gain_db": req.bgm_gain_db})
+    return {"id": resp["id"], "job_id": resp["id"], "status": resp["status"]}
