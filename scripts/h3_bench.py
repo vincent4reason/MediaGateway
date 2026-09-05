@@ -5,10 +5,12 @@ Drives the live Gateway (:8600) serially with fixed prompt/seed/geometry,
 records wall time per config, then SSIM (ffmpeg) of each output vs reference R.
 Results: /tmp/h3bench/results.json + printed table. Stdlib only.
 """
+import hashlib
 import json
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -49,6 +51,8 @@ def run_one(name, cfg):
     jid = job["id"]
     t0 = time.time()
     while True:
+        if time.time() - t0 > 2400:
+            raise SystemExit(f"{name} exceeded 2400s (job {jid} still {j['status']})")
         j = api("GET", f"/v1/jobs/{jid}")
         if j["status"] in ("completed", "failed", "cancelled"):
             break
@@ -79,15 +83,22 @@ def main():
     only = sys.argv[1:] or [c[0] for c in CONFIGS]
     results_path = OUT / "results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() else []
-    done = {r["name"] for r in results}
+    def fp(name, cfg):
+        payload = json.dumps({**BASE, **cfg}, sort_keys=True)
+        return f"{name}:{hashlib.sha256(payload.encode()).hexdigest()[:8]}"
+
+    done = {r.get("fingerprint") for r in results}
     for name, cfg in CONFIGS:
-        if name not in only or name in done:
+        if name not in only or fp(name, cfg) in done:
             continue
         print(f"=== {name}: {cfg}", flush=True)
         try:
-            results.append(run_one(name, cfg))
-        except SystemExit as e:
-            print(f"  [skip] {e}", flush=True)
+            entry = run_one(name, cfg)
+        except (SystemExit, OSError, KeyError, ValueError) as e:
+            print(f"  [skip] {type(e).__name__}: {e}", flush=True)
+            continue
+        entry["fingerprint"] = fp(name, cfg)
+        results.append(entry)
         results_path.write_text(json.dumps(results, indent=1))
 
     ref = next((r for r in results if r["name"] == "R" and r.get("output_path")), None)

@@ -7,6 +7,7 @@ dir on load (shaders resolve relative to cwd) — that is by design, not a bug.
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import threading
 from pathlib import Path
@@ -83,15 +84,18 @@ _PROFILES = {
 
 
 def _internal_canvas(width: int, height: int, factor: float):
-    """同长宽比缩小到 32 倍数（h3 internal canvas 要求同比例，否则拒绝）。"""
-    import math
+    """同长宽比缩小到 32 倍数（h3 internal canvas 要求同比例，否则拒绝）。
+    互素比例（g=1）或缩放后等于原尺寸时返回 None（静默放弃 internal）。"""
     uw, uh = width // 32, height // 32
     if uw < 2 or uh < 2:
         return None
     g = math.gcd(uw, uh)
     base_w, base_h = uw // g, uh // g  # 例: 864x480 → 9x5
-    k = max(1, round(width * factor / (base_w * 32)))
-    return base_w * k * 32, base_h * k * 32
+    k = round(width * factor / (base_w * 32))
+    if k < 1:
+        return None
+    out = base_w * k * 32, base_h * k * 32
+    return None if out == (width, height) else out
 
 
 def run(params: dict, job_dir: Path, progress, cancel) -> dict:
@@ -112,10 +116,12 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         dit_layers=int(params.get("dit_layers", profile.get("dit_layers", 45))),
     )
     # core_reuse/token_reduction/ssd_streaming mirror h3cweb: only send non-defaults.
-    core = int(params.get("core_reuse", profile.get("core_reuse", 1)))
+    # 哨兵合并：显式键（含显式 false/0）优先于 profile
+    core = int(params["core_reuse"]) if "core_reuse" in params else int(profile.get("core_reuse", 1))
     if core > 1:
         overrides["core_reuse"] = core
-    if params.get("token_reduction") or profile.get("token_reduction"):
+    tok = params["token_reduction"] if "token_reduction" in params else profile.get("token_reduction")
+    if tok:
         overrides["token_reduction"] = 1
     if params.get("ssd_streaming"):
         overrides["ssd_streaming"] = 1

@@ -63,6 +63,8 @@ def test_profile_expansion():
                  and ov["token_reduction"] == 1),
                 ({"prompt": "x", "profile": "quality", "steps": 9},
                  lambda ov: ov["steps"] == 9),  # 显式参数覆盖 profile
+                ({"prompt": "x", "profile": "quality", "token_reduction": False},
+                 lambda ov: "token_reduction" not in ov),  # 显式 false 关掉 profile True
             ]):
                 video._engine = eng  # closed after each run — re-inject
                 with tempfile.TemporaryDirectory() as sub:
