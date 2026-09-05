@@ -69,6 +69,10 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         "-H", str(height),
         "-o", str(out),
     ]
+    if params.get("base"):  # 未蒸馏 CFG 模式：身份/服饰遵从显著更强，慢 ~25 倍
+        cmd += ["--base"]
+    if params.get("guidance") is not None:
+        cmd += ["--guidance", str(params["guidance"])]
     for r in refs:
         cmd += ["-i", str(r)]
 
