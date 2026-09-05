@@ -45,6 +45,8 @@ def patch_stages(image=None, video=None, voice=None, music=None, muxRecorder=Non
     if muxRecorder is not None:
         class _M:
             def __getattr__(self, name):
+                if name == "extract_last_frame":  # P10 tail-frame: stub, no ffmpeg
+                    return lambda video, out: out
                 assert name == "mux", name
                 return muxRecorder
         shot.render = _M()
@@ -82,6 +84,9 @@ def test_stage_order_and_paths():
             assert result["output_path"].endswith("shot.mp4")
             jd = Path(d)
             assert img.calls[0]["job_dir"] == str(jd / "image")
+            # Ref2VA 顺序:voice 在 video 之前完成,video 收到 audio ref
+            assert vid.calls[0]["params"]["refs"] == [
+                {"kind": "audio", "path": f"{jd}/voice/voice.out"}]
             assert vid.calls[0]["job_dir"] == str(jd / "video")
             assert voi.calls[0]["job_dir"] == str(jd / "voice")
             assert mus.calls[0]["job_dir"] == str(jd / "music")
@@ -89,6 +94,7 @@ def test_stage_order_and_paths():
             assert Path(kw["video"]).name == "video.out"
             assert [Path(t["path"]).name for t in kw["audio_tracks"]] == ["voice.out", "music.out"]
             assert kw["audio_tracks"][1]["loop"] is True
+            assert kw["mute_source_audio"] is True  # 有 voice/music → h3 音轨丢弃
             assert result["stages"]["image"]["output_path"].endswith("image.out")
     finally:
         restore(saved)

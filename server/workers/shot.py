@@ -35,6 +35,11 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     enabled = [s for s in ("image", "video", "voice", "music") if params.get(s)]
     if not enabled:
         raise ValueError("at least one of image/video/voice/music is required")
+    # Ref2VA：有台词时 TTS 必须先于视频跑——wav 作为 ref_audio 驱动 h3 口型，
+    # h3 自渲染音轨在混音时丢弃、铺 TTS 原声（音色 100% 归 Voice Worker）
+    if "voice" in enabled and "video" in enabled:
+        enabled.remove("voice")
+        enabled.insert(enabled.index("video"), "voice")
     total_w = sum(_STAGE_WEIGHTS[s] for s in enabled)
     done_w = 0.0
     meta: dict = {}
@@ -59,6 +64,12 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
             if not img:
                 raise ValueError("video.first_frame='auto' needs the image stage")
             spec["first_frame"] = img["output_path"]
+        if stage == "video" and "voice" in outputs:
+            # 台词 wav 进 refs 驱动口型；顺带归一化影策传来的字符串 refs
+            refs = [{"kind": "image", "path": r} if isinstance(r, str) else r
+                    for r in (spec.get("refs") or [])]
+            refs.append({"kind": "audio", "path": outputs["voice"]["output_path"]})
+            spec["refs"] = refs
 
         module = {"image": image_w, "video": video_w,
                   "voice": voice_w, "music": music_w}[stage]
@@ -82,6 +93,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
     final = str(job_dir / "shot.mp4")
     render.mux(
         video=vid["output_path"], audio_tracks=tracks, output=final,
+        # h3 不再出音轨：有 voice/music 时丢弃自带音轨（Ref2VA 工作流里那是模型渲染版）
+        mute_source_audio=bool(tracks),
         subtitles=mix.get("subtitles"),
         dialogue_volume=float(mix.get("dialogue_volume", 1.0)),
         music_volume=float(mix.get("music_volume", 0.15)),
