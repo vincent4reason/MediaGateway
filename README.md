@@ -101,7 +101,11 @@ docs/                plan.md · tools.md (engine inventory) · h3_speed_plan.md
 
 ## Related
 
-- [影策 / open-ai-canvas](https://github.com/ddcat-ai/open-ai-canvas) — the director
-  OS this gateway is wired into (see our fork `MediaGateway_YingCe`).
+- [MediaGateway_YingCe](https://github.com/vincent4reason/MediaGateway_YingCe) —
+  our director-side companion: a fork of [影策 / open-ai-canvas](https://github.com/ddcat-ai/open-ai-canvas)
+  (AI film & drama creation workbench) wired to this gateway. It renders storyboards
+  through this gateway's shot pipeline — draft/quality profiles, TTS-driven lip sync,
+  BGM mixing — and manages projects, characters, scenes and the novel-to-storyboard
+  skill chain. Run it on :8090 (Go) + :3000 (React) alongside this gateway.
 - [antirez/h3.c](https://github.com/antirez/h3.c) — the video engine and the
   ctypes bridge source.

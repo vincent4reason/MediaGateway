@@ -99,6 +99,9 @@ docs/                plan.md · tools.md(引擎实测)· h3_speed_plan.md(速度
 
 ## 相关仓库
 
-- [影策 / open-ai-canvas](https://github.com/ddcat-ai/open-ai-canvas) — 对接本网关的导演 OS
-  (我们的 fork:`MediaGateway_YingCe`)
+- [MediaGateway_YingCe](https://github.com/vincent4reason/MediaGateway_YingCe) —
+  导演侧配套仓库:[影策 / open-ai-canvas](https://github.com/ddcat-ai/open-ai-canvas)
+  (AI 影视短剧创作工作台)的 fork,已接入本网关。分镜经本网关的 shot 流水线渲染——
+  草稿/成片双档、TTS 口型对齐、BGM 混音;同时管理项目/角色/场景与小说转分镜技能链。
+  与本网关配套运行::8090(Go 后端)+ :3000(React 前端)。
 - [antirez/h3.c](https://github.com/antirez/h3.c) — 视频引擎及 ctypes bridge 来源
