@@ -112,14 +112,15 @@ def test_missing_prompt():
 def test_bad_duration():
     with tempfile.TemporaryDirectory() as tmp:
         setup_env(tmp)
-        for bad in (5, 601):
-            try:
-                music.run({"prompt": "x", "duration_s": bad}, Path(tmp),
-                          Recorder(), lambda: False)
-            except ValueError as e:
-                assert "duration_s" in str(e)
-            else:
-                raise AssertionError(f"expected ValueError for duration {bad}")
+        # 越界时长不再拒单：夹紧到 10-600（mux 的 atrim 会裁回视频长度）
+        for bad, clamped in ((5, "10.0"), (601, "600.0")):
+            job = Path(tmp) / f"job_{bad}"
+            job.mkdir()
+            meta = music.run({"prompt": "x", "duration_s": bad}, job,
+                             Recorder(), lambda: False)
+            args = json.loads((job / "output.wav.args.json").read_text())
+            assert args[args.index("--duration") + 1] == clamped, (bad, args)
+            assert meta["output_path"].endswith("output.wav")
 
 
 def test_nonzero_exit():

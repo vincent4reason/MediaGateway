@@ -219,17 +219,25 @@ def _admit_next() -> tuple[str, dict] | None:
             _update(row["id"], status="failed", error=f"unknown type: {row['type']}",
                     finished_at=time.time())
             continue
-        # GPU mutual exclusion: video/shot can't share 48GB with the resident
-        # LLM. Ask it to unload, skip this round; the next poll re-checks until
-        # the LLM process is gone. Absent llm module => behaviour unchanged.
+        # GPU mutual exclusion: video/shot can't share 48GB with resident
+        # engines (LLM 19GB, TTS 8.7GB). Ask them to unload, skip this round;
+        # the next poll re-checks until the processes are gone. Absent module
+        # => behaviour unchanged.
         if row["type"] in ("video", "shot"):
-            llm_mod = sys.modules.get(_LLM_MODULE)
-            if llm_mod is not None:
-                if getattr(llm_mod, "busy", lambda: False)():
-                    break  # chat in flight / mid-spawn — wait it out, no thrash
-                if llm_mod.resident():
-                    getattr(llm_mod, "request_unload", lambda: None)()
+            blocked = False
+            for mod_name in (_LLM_MODULE, "server.workers.voice"):
+                mod = sys.modules.get(mod_name)
+                if mod is None:
+                    continue
+                if getattr(mod, "busy", lambda: False)():
+                    blocked = True
                     break
+                if getattr(mod, "resident", lambda: False)():
+                    getattr(mod, "request_unload", lambda: None)()
+                    blocked = True
+                    break
+            if blocked:
+                break
         if running_gb + worker.MEM_GB <= BUDGET_GB:
             return worker, _job_row(row)
         # budget-blocked: stop at first job that doesn't fit (FIFO head blocking
@@ -265,10 +273,20 @@ def _run_job(worker, job: dict):
 
 def scheduler_loop(poll_s: float = 0.5):
     while True:
-        with _pick_lock:
-            nxt = _admit_next()
-        if nxt:
-            worker, job = nxt
-            _update(job["id"], status="running", started_at=time.time())
-            threading.Thread(target=_run_job, args=(worker, job), daemon=True).start()
+        try:
+            with _pick_lock:
+                nxt = _admit_next()
+            if nxt:
+                worker, job = nxt
+                with _lock:
+                    # 条件更新：取消与准入竞态时 rowcount=0，被取消的 job 不再启动
+                    cur = db().execute(
+                        "UPDATE jobs SET status='running', started_at=? WHERE id=? AND status='queued'",
+                        (time.time(), job["id"]))
+                    db().commit()
+                if cur.rowcount == 0:
+                    continue
+                threading.Thread(target=_run_job, args=(worker, job), daemon=True).start()
+        except Exception as e:  # noqa: BLE001 — 一轮失败不能让队列线程静默死亡
+            print(f"[core] scheduler round failed: {e}", flush=True)
         time.sleep(poll_s)

@@ -95,7 +95,7 @@ def test_defaults_and_random_seed():
         assert "-i" not in args  # no img2img flag
         assert args[args.index("-W") + 1] == "1024"
         assert args[args.index("-H") + 1] == "1024"
-        assert args[args.index("--steps") + 1] == "4"
+        assert args[args.index("--steps") + 1] == "12"
         assert isinstance(meta["seed"], int) and 0 <= meta["seed"] < 2**31
         assert args[args.index("--seed") + 1] == str(meta["seed"])
 

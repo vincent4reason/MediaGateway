@@ -68,15 +68,17 @@ def resident() -> bool:
             return True
         if time.time() - _checked < 5:
             return _known
-    _known = _healthy()
-    _checked = time.time()
-    return _known
+        _known = _healthy()
+        _checked = time.time()
+        return _known
 
 
 def _port_pids() -> list[int]:
     try:
+        # absolute path: launchd PATH has no /usr/sbin, bare "lsof" vanishes and
+        # the unload sweep silently no-ops, deadlocking video behind the LLM
         out = subprocess.check_output(
-            ["lsof", "-t", f"-iTCP:{PORT}", "-sTCP:LISTEN"],
+            ["/usr/sbin/lsof", "-t", f"-iTCP:{PORT}", "-sTCP:LISTEN"],
             timeout=5, stderr=subprocess.DEVNULL)
         return [int(p) for p in out.split()]
     except Exception:  # noqa: BLE001 — nothing listening / lsof missing
@@ -96,11 +98,10 @@ def ensure(timeout: float = READY_TIMEOUT_S):
         # while we're mid-spawn (TOCTOU: port isn't bound yet)
         _loading = True
         if _proc is None or _proc.poll() is not None:
-            log = open(QWEN_DIR / "serve.log", "a")
-            log.write(f"\n[llm.py] spawn {time.strftime('%F %T')} {' '.join(CMD)}\n")
-            log.flush()
-            _proc = subprocess.Popen(CMD, cwd=QWEN_DIR, stdout=log, stderr=log)
-            log.close()
+            with open(QWEN_DIR / "serve.log", "a") as log:
+                log.write(f"\n[llm.py] spawn {time.strftime('%F %T')} {' '.join(CMD)}\n")
+            _proc = subprocess.Popen(CMD, cwd=QWEN_DIR,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.time() + timeout
         while time.time() < deadline:

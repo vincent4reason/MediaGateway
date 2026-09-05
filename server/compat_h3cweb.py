@@ -171,7 +171,10 @@ def _save_data_url(text: str, kind: str = "image") -> Optional[str]:
     os.makedirs(REFS_DIR, exist_ok=True)
     path = os.path.join(REFS_DIR, f"ref_{uuid.uuid4().hex[:8]}{ext}")
     with open(path, "wb") as f:
-        f.write(base64.b64decode(m.group(3)))
+        try:
+            f.write(base64.b64decode(m.group(3)))
+        except (ValueError, base64.binascii.Error) as e:
+            raise HTTPException(400, f"bad data URL payload: {e}")
     return path
 
 
@@ -182,6 +185,10 @@ async def openai_create_video(request: Request):
     ref_paths: list[str] = []
     if ct.startswith("multipart/") or ct.startswith("application/x-www-form"):
         form = await request.form()
+        for key in ("audios", "reference_audios", "audio_url", "videos",
+                    "reference_videos", "video_url"):
+            if form.get(key):
+                raise HTTPException(400, f"{key} references not supported (images only)")
         raw = {k: form.get(k) for k in ("prompt", "size", "seconds")}
         up = form.get("input_reference")
         if up is not None and hasattr(up, "read"):
@@ -196,6 +203,8 @@ async def openai_create_video(request: Request):
             raw = await request.json()
         except Exception:
             raise HTTPException(400, "body must be JSON or form")
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "body must be a JSON object")
         # canvas sends one of these names depending on provider hints
         imgs = raw.get("input_reference")
         if imgs is None:

@@ -6,6 +6,7 @@ dir on load (shaders resolve relative to cwd) — that is by design, not a bug.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 from pathlib import Path
@@ -36,6 +37,8 @@ def _get_engine():
         try:
             eng.load()
         except Exception as e:  # noqa: BLE001
+            with contextlib.suppress(Exception):
+                eng.close()  # 半加载引擎也释放 ctypes 句柄
             raise VideoError(f"h3 engine load failed ({LIB}): {e}") from e
         _engine = eng
     return _engine
@@ -129,7 +132,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
                 # reset the singleton FIRST: if close() raises we must not
                 # leave it pointing at a (possibly broken) closed engine
                 _engine = None
-                engine.close()
+                with contextlib.suppress(Exception):
+                    engine.close()  # 不吞 generate 的原始异常
     if cancel():
         raise VideoError("cancelled")
     return {"output_path": output_path,

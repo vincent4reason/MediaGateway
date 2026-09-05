@@ -8,10 +8,12 @@ both are short tasks (image ~70s, TTS ~10s) and the caller is local.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -29,7 +31,7 @@ router = APIRouter()
 _WAIT_TIMEOUT = 900
 
 
-def _wait_job(job_id: str, timeout: float = _WAIT_TIMEOUT) -> dict:
+async def _wait_job(job_id: str, timeout: float = _WAIT_TIMEOUT) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         job = core.get_job(job_id)
@@ -39,8 +41,10 @@ def _wait_job(job_id: str, timeout: float = _WAIT_TIMEOUT) -> dict:
             if job["status"] != "completed":
                 raise HTTPException(500, job.get("error") or f"job {job['status']}")
             return job
-        time.sleep(1)
-    raise HTTPException(504, f"job did not finish in {timeout}s")
+        # async 轮询：不占 threadpool 线程（同步版几个并发就占满 40 线程池）
+        await asyncio.sleep(1)
+    raise HTTPException(504, f"job {job_id} did not finish in {timeout}s "
+                             f"(still running; poll GET /v1/jobs/{job_id})")
 
 
 class ImageGenIn(BaseModel):
@@ -63,27 +67,29 @@ def _parse_size(size: Optional[str]) -> tuple[int, int]:
         height -= height % 32
         if width < 32 or height < 32:
             raise HTTPException(400, "resolution too small")
+        if max(width, height) > 1536:
+            raise HTTPException(400, "resolution too large (max side 1536)")
     return width, height
 
 
-def _gen_images(prompt: str, n: int, seed: Optional[int], extra: dict) -> list[dict]:
+async def _gen_images(prompt: str, n: int, seed: Optional[int], extra: dict) -> list[dict]:
     data = []
     for i in range(n):
         params = {"prompt": prompt, **extra}
         if seed is not None:
             params["seed"] = seed + i
-        job = _wait_job(core.create_job("image", params)["id"])
+        job = await _wait_job(core.create_job("image", params)["id"])
         with open(job["output_path"], "rb") as f:
             data.append({"b64_json": base64.b64encode(f.read()).decode()})
     return data
 
 
 @router.post("/v1/images/generations")
-def images_generations(req: ImageGenIn):
+async def images_generations(req: ImageGenIn):
     n = max(1, min(int(req.n or 1), 4))
     width, height = _parse_size(req.size)
     return {"created": int(time.time()),
-            "data": _gen_images(req.prompt, n, req.seed, {"width": width, "height": height})}
+            "data": await _gen_images(req.prompt, n, req.seed, {"width": width, "height": height})}
 
 
 _MAGIC_EXTS = ((b"\x89PNG", "png"), (b"\xff\xd8", "jpg"), (b"P5", "ppm"), (b"P6", "ppm"))
@@ -130,8 +136,7 @@ async def images_edits(
     if len(image) > 16:
         raise HTTPException(400, "at most 16 reference images (iris MAX_INPUT_IMAGES)")
     for up in image:
-        fsize = getattr(up.file, "size", None)
-        if fsize is not None and fsize > 20 * 1024 * 1024:
+        if up.size and up.size > 20 * 1024 * 1024:
             raise HTTPException(413, f"reference image too large (>20MB): {up.filename}")
     if mask is not None:
         raise HTTPException(400, "mask is not supported by the local image model")
@@ -140,10 +145,37 @@ async def images_edits(
     tmpdir = tempfile.mkdtemp(prefix="mg_edits_")
     try:
         refs = [_save_ref(i, await up.read(), tmpdir) for i, up in enumerate(image)]
-        data = _gen_images(prompt, n, seed, {"width": width, "height": height, "input": refs})
+        data = await _gen_images(prompt, n, seed, {"width": width, "height": height, "input": refs})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return {"created": int(time.time()), "data": data}
+
+
+def _wav_duration(path: str) -> float:
+    """Duration from a RIFF/WAVE header (same parse as workers/music._wav_info)."""
+    with open(path, "rb") as f:
+        head = f.read(12)
+        if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+            raise ValueError(f"not a WAV: {path}")
+        rate = channels = bits = None
+        data_size = 0
+        while True:
+            hdr = f.read(8)
+            if len(hdr) < 8:
+                break
+            cid, size = hdr[:4], struct.unpack("<I", hdr[4:])[0]
+            if cid == b"fmt ":
+                fmt = f.read(size)
+                channels, rate = struct.unpack("<HI", fmt[2:8])
+                bits = struct.unpack("<H", fmt[14:16])[0]
+            elif cid == b"data":
+                data_size = size
+                f.seek(size, os.SEEK_CUR)
+            else:
+                f.seek(size + (size & 1), os.SEEK_CUR)
+    if not (rate and channels and bits and data_size):
+        raise ValueError(f"incomplete WAV header: {path}")
+    return round(data_size / (rate * channels * bits // 8), 2)
 
 
 class SpeechIn(BaseModel):
@@ -153,15 +185,18 @@ class SpeechIn(BaseModel):
     speed: float = 1.0
 
 
-def _known_voice(model: Optional[str]) -> Optional[str]:
-    """影策渠道模型把 voiceId 放在 model 字段；命中 voices.json 才采纳。"""
-    if not model:
-        return None
+def _known_voice(model: Optional[str], default: bool = False) -> Optional[str]:
+    """影策渠道模型把 voiceId 放在 model 字段；命中 voices.json 才采纳。
+
+    default=True：model 未命中时返回 voices.json 首个音色（无绑定的调用方兜底）。
+    """
     try:
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "vendor", "cosyvoice", "voices.json"), encoding="utf-8") as f:
             voices = json.load(f)
-        return model if model in voices else None
+        if model and model in voices:
+            return model
+        return next(iter(voices)) if default and voices else None
     except (OSError, ValueError):
         return None
 
@@ -171,7 +206,7 @@ def _is_qwen(model: Optional[str]) -> bool:
 
 
 @router.post("/v1/audio/speech")
-def audio_speech(req: SpeechIn, request: Request):
+async def audio_speech(req: SpeechIn, request: Request):
     if not req.input.strip():
         raise HTTPException(400, "input is required")
     params: dict = {"text": req.input, "speed": req.speed}
@@ -181,13 +216,17 @@ def audio_speech(req: SpeechIn, request: Request):
             params["voice"] = req.voice  # plugin coalesces voice to model key
     else:
         jtype = "voice"
-        voice = req.voice or _known_voice(req.model)
+        voice = req.voice or _known_voice(req.model, default=True)
         if voice:
-            params["voice"] = voice  # else voice worker uses its default voice
+            params["voice"] = voice
     job = core.create_job(jtype, params)
-    job = _wait_job(job["id"], timeout=300)
+    job = await _wait_job(job["id"], timeout=300)
     base = str(request.base_url).rstrip("/")
-    return {"url": f"{base}/v1/audio/jobs/{job['id']}/content"}
+    try:
+        duration = _wav_duration(job["output_path"])
+    except Exception:  # noqa: BLE001 — non-wav output (tests/fakes): no duration
+        duration = None
+    return {"url": f"{base}/v1/audio/jobs/{job['id']}/content", "duration_seconds": duration}
 
 
 @router.get("/v1/audio/jobs/{job_id}/content")
@@ -198,4 +237,39 @@ def audio_content(job_id: str):
     op = job["output_path"]
     if job["status"] != "completed" or not op or not os.path.isfile(op):
         raise HTTPException(409, "audio not ready")
+    return FileResponse(op, media_type="audio/wav")
+
+
+# --- music face (ACE-Step via the scheduler; see workers/music.py) ---
+
+class MusicIn(BaseModel):
+    prompt: str
+    duration_s: float = 45
+
+
+@router.post("/v1/music")
+async def music_generate(req: MusicIn, request: Request):
+    if not req.prompt.strip():
+        raise HTTPException(400, "prompt is required")
+    if not 10 <= req.duration_s <= 600:  # music worker supported range
+        raise HTTPException(400, "duration_s must be 10-600")
+    job = await _wait_job(core.create_job(
+        "music", {"prompt": req.prompt, "duration_s": req.duration_s})["id"])
+    base = str(request.base_url).rstrip("/")
+    try:
+        duration = _wav_duration(job["output_path"])
+    except Exception:  # noqa: BLE001
+        duration = None
+    return {"url": f"{base}/v1/music/jobs/{job['id']}/content",
+            "duration_seconds": duration}
+
+
+@router.get("/v1/music/jobs/{job_id}/content")
+def music_content(job_id: str):
+    job = core.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "music not found")
+    op = job["output_path"]
+    if job["status"] != "completed" or not op or not os.path.isfile(op):
+        raise HTTPException(409, "music not ready")
     return FileResponse(op, media_type="audio/wav")

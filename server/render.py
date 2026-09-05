@@ -129,6 +129,8 @@ def concat(
         except ValueError:
             raise RenderError(f"無法解析時長: {f} → {raw!r}")
 
+    if duration >= min(durs):
+        raise RenderError(f"transition duration ({duration}s) 必须短于最短镜头 ({min(durs)}s)")
     n = len(inputs)
     fc = ""
     prev_v, prev_a = "[0:v]", "[0:a]"
@@ -345,8 +347,8 @@ def bgm(
     has_own_audio = bool(_probe(video, select_audio=True))
 
     inputs = ["-i", video]
-    for s in segments:
-        inputs += ["-i", s["path"]]
+    for seg in segments:
+        inputs += ["-i", seg["path"] if isinstance(seg, dict) else seg]
     # aformat 統一取樣率/聲道——acrossfade/amix 遇到混合取樣率的輸入會直接報錯
     fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
     fc = ""

@@ -32,6 +32,7 @@ IDLE_EXIT_S = float(os.environ.get("COSYVOICE_IDLE_EXIT_S", "300"))
 _proc: subprocess.Popen | None = None
 _last_use = 0.0
 _busy = False  # a synthesis is in flight — watchdog must not kill the server
+_unload_pending = False
 _lock = threading.Lock()
 
 
@@ -42,6 +43,45 @@ def _healthy() -> bool:
             return json.loads(r.read()).get("model_loaded") is True
     except Exception:  # noqa: BLE001 - not up yet == unhealthy
         return False
+
+
+def busy() -> bool:
+    """合成进行中 —— 调度器不得此时卸载。"""
+    with _lock:
+        return _busy
+
+
+def resident() -> bool:
+    """TTS 服务器进程还活着（占用 GPU 内存）。"""
+    with _lock:
+        return _proc is not None and _proc.poll() is None
+
+
+def request_unload() -> None:
+    """video/shot 准入前由调度器调用：终止常驻 tts server 让出显存。
+    与 watchdog 同样只在非 busy 时动手；正在合成则交给 watchdog 稍后再杀。"""
+    global _unload_pending
+    with _lock:
+        if _busy:
+            _unload_pending = True
+            return
+    unload()
+
+
+def unload() -> bool:
+    global _proc
+    with _lock:
+        proc, _proc = _proc, None
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+            return True
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            return True
+    return False
 
 
 def _ensure_server(progress):
@@ -78,6 +118,8 @@ def _watchdog():
             if (_proc is not None and _proc.poll() is None and not _busy
                     and time.time() - _last_use > IDLE_EXIT_S):
                 _proc.terminate()
+                if _proc.wait(timeout=5) is None:
+                    _proc.kill()  # graceful shutdown 卡住：强杀
                 _proc = None
 
 

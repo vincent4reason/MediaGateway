@@ -16,7 +16,7 @@ from . import core, llm
 
 router = APIRouter()
 
-UPSTREAM_TIMEOUT_S = 300.0
+UPSTREAM_TIMEOUT_S = 900.0  # cold load of the 19GB qwen takes minutes; don't 502 mid-load
 
 
 class ChatMessage(BaseModel):
@@ -30,6 +30,7 @@ class ChatRequest(BaseModel):
     stream: bool = False
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
+    enable_thinking: Optional[bool] = None
 
 
 def _video_running() -> bool:
@@ -52,12 +53,19 @@ def chat_completions(req: ChatRequest):
             "error": {"message": "stream=true 不支持，请用非流式请求", "type": "invalid_request_error"}})
     if _video_running():
         return _busy_response()
-    llm.ensure()
+    try:
+        llm.ensure()
+    except RuntimeError as e:
+        return JSONResponse(status_code=502, content={
+            "error": {"message": f"LLM 不可用：{e}", "type": "upstream_error"}})
     # re-check after the (possibly 10s+) spawn: a video job may have been
     # admitted meanwhile — loading 19GB + 35GB together would OOM
     if _video_running():
         return _busy_response()
     body = req.model_dump(exclude_none=True)
+    # qwen3.8 reasoning burns ~12k tokens (~11 min @ 18tok/s) per round; the
+    # storyboard pipeline wants content, not deliberation. Caller can override.
+    body.setdefault("enable_thinking", False)
     with llm.busy_guard():
         try:
             r = httpx.post(f"{llm.BASE_URL}/v1/chat/completions", json=body,

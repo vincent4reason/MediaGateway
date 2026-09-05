@@ -42,11 +42,13 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         raise ValueError("params.prompt is required")
     width = int(params.get("width", 1024))
     height = int(params.get("height", 1024))
-    steps = int(params.get("steps", 4))
+    steps = int(params.get("steps", 12))  # 4 步出片偏卡通/油膩感，寫實檔 12 步（512 圖約 1 分鐘）
     seed = params.get("seed", 42)
     if seed is None:  # CLI requires an explicit --seed; pick one for "random"
         seed = random.randint(0, 2**31 - 1)
     ref = params.get("input")
+    if ref is not None and not isinstance(ref, (str, list)):
+        raise ValueError("input must be a path string or list of paths")
     refs = [ref] if isinstance(ref, str) else list(ref or [])
     if len(refs) > 16:  # iris MAX_INPUT_IMAGES
         raise ValueError("at most 16 reference images supported")

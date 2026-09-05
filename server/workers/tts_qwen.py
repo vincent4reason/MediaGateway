@@ -81,7 +81,8 @@ def run(params: dict, job_dir: Path, progress, cancel) -> dict:
         raise Exception(f"tts_qwen timeout after {timeout}s (process killed)")
     progress(0.95, "saving")
 
-    outs = sorted(job_dir.glob("output*.wav"))
+    outs = sorted(job_dir.glob("output*.wav"),
+                  key=lambda f: (f.name != "output.wav", len(f.name), f.name))
     if proc.returncode != 0 or not outs:
         tail = (proc.stderr or proc.stdout or "")[-500:]
         raise Exception(f"mlx-audio exited {proc.returncode}: {tail}")

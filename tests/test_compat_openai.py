@@ -5,6 +5,8 @@ Run: .venv/bin/python tests/test_compat_openai.py
 from __future__ import annotations
 
 import base64
+import json
+import os
 import struct
 import sys
 import tempfile
@@ -12,6 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# 隔离：绝不碰真实 data/gateway.db 与真实 ：8000 LLM（与 test_compat 同款）
+os.environ.setdefault("MG_DB", os.path.join(tempfile.mkdtemp(prefix="mgtest_"), "gateway.db"))
+os.environ.setdefault("QWEN_PORT", "8899")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -171,7 +177,11 @@ def test_audio_speech_model_falls_back_to_voice():
             assert fake.calls[0][1]["voice"] == "C002"
             r = client.post("/v1/audio/speech", json={"input": "你好", "model": "gpt-4o-mini-tts"})
             assert r.status_code == 200, r.text
-            assert "voice" not in fake.calls[1][1]
+            # 未命中 model：回退 voices.json 首个音色（无绑定调用方的兜底）
+            first_voice = next(iter(json.load(open(
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "vendor", "cosyvoice", "voices.json")))))
+            assert fake.calls[1][1]["voice"] == first_voice
             # explicit voice still wins over model
             r = client.post("/v1/audio/speech", json={"input": "你好", "model": "C001", "voice": "C002"})
             assert r.status_code == 200, r.text
