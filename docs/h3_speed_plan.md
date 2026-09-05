@@ -63,7 +63,26 @@ worker 新透传参数：`use_int8_row_fc2`、`render_width/render_height`（32 
 
 不改权重/VAE/DiT 架构；不 reuse3+layers40+token 三连开；reuse 与 core-reuse 互斥；int8 与 ssd 互斥；不做 SSD streaming 追速度；benchmark 关 `--show`；2K 走「低分辨率 latent + tiled VAE decode」独立项目，不动 Native DiT。
 
-## 6. 执行顺序
+## 7. P0 结果（2026-09-05 实测，864×480/120f/5s/seed42）
+
+| # | 配置 | 耗时 | vs R | SSIM* |
+|---|---|---:|---:|---:|
+| R | 20/50/reuse1 | 1291s | 1× | 1.0 |
+| A | 20/45/reuse2 | 640s | 2.0× | 0.63 |
+| B | A+token | 370s | 3.5× | 0.62 |
+| C | B+int8 | 370s(+0%) | 3.5× | 0.61 |
+| D | 20/45/core4+token | **280s** | **4.6×** | 0.64 |
+| E | 6/45/reuse1（原默认） | 340s | 3.8× | 0.67 |
+| F | E+internal 576×320 | 120s | 10.8× | 0.61 |
+| G | F+token+int8 | **110s** | **11.7×** | 0.58 |
+
+结论：
+- **int8 在 M5 Pro 零收益**（与上游 M5 Max +2.6% 不符），profile 已剔除
+- **core-reuse4+token（D）= quality 档**（4.6×）；**internal+token（G）= draft 档**（11.7×）
+- *SSIM 局限：跨去噪路径的逐帧 SSIM 天然 0.6 档（生成内容本就不同），不能作 ≥95% 门槛——
+  质量验收以人眼构图/主体/运动 checklist 为准（R vs D/G 样片在 /tmp/h3bench/assets/）
+
+## 8. 执行顺序（历史）
 
 ```
 P0  benchmark 矩阵（R/A/B/C/D/E/F/G，固定 seed，ffmpeg ssim + 人眼 checklist）→ 定 standard/quality
