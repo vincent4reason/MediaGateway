@@ -7,22 +7,22 @@ and a set of local inference engines, exposing one unified async job API.
 **中文文档:[README.zh-CN.md](README.zh-CN.md)**
 
 ```text
-影策 canvas (MediaGateway_YingCe, Go :8090 + React :3000)
-   │  shot render endpoints · OpenAI-compatible faces (/v1/videos, /v1/images/*,
-   │  /v1/audio/speech, /v1/chat/completions) · POST /v1/jobs
-   ▼
-┌──────────────────────────────────────────────────────────────┐
-│ AI Media Gateway  (FastAPI, :8600)                           │
-│  job queue · SQLite · memory-budget scheduler                │
-│  OpenAI-compatible faces · local LLM face (qwen3.8, MLX)     │
-└───────────────┬──────────────────────────────────────────────┘
-                │  worker contract (load → run → release)
-   ┌────────┬──────────┬───────────┬───────────┬───────┬────────┬─────────┐
-   ▼        ▼          ▼           ▼           ▼       ▼        ▼         ▼
- image    video      voice     tts_qwen     music    mix    concat     shot
- iris.c   h3.c     CosyVoice  Qwen3-TTS  ACE-Step   SFX    FFmpeg   composite
- (FLUX) (MiniMax-H3, 0.5B                (MLX)   library  stitch  (draft /
-         Metal, Ref2VA)                                    quality)
+   Yingce canvas (Go :8090 + React :3000)
+     |  shot render endpoints, OpenAI faces (/v1/videos, /v1/images/*,
+     |  /v1/audio/speech, /v1/chat/completions), POST /v1/jobs
+     v
+   +--------------------------------------------------------------+
+   | AI Media Gateway (FastAPI, :8600)                            |
+   | job queue | SQLite | memory-budget scheduler                 |
+   | OpenAI faces | local LLM face (qwen3.8, MLX)                 |
+   +-----------------------------------+---------------------------+
+                                      |  worker contract (load -> run -> release)
+                                      v
+   +----------------------------------+----------------------------------+
+   v         v         v         v         v         v         v         v
+   image     video     voice     tts_qwen  music     mix       concat    shot     
+   iris.c    h3.c      CosyVoice Qwen3-TTS ACE-Step  SFX lib   FFmpeg    profiles 
+   (FLUX)    h3 Metal  0.5B      MLX       MLX       sfx_tag   stitch    draft/full
 ```
 
 ## Engines
